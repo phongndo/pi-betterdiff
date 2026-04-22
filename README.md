@@ -72,6 +72,11 @@ It re-validates the package, creates a tarball with `npm pack`, uploads it as a 
 
 > The package is currently marked `private: true` to prevent accidental npm publication while the repository is still scaffold-only.
 
+## Planning docs
+
+- [docs/plan.md](docs/plan.md) — scaffold and implementation plan
+- [docs/diff-review-spec.md](docs/diff-review-spec.md) — planned `/diff` UX and navigation model
+
 ## Next steps
 
-See [docs/plan.md](docs/plan.md) for the implementation plan once you want to move beyond repository setup and start the actual better-diff extension work.
+The current plan is to grow this into a tree-inspired diff review UI for pi session mutations, opened via `/diff` and a default `ctrl+space` shortcut, with `ctrl+g` opening the selected hunk in an external editor and then returning to the diff UI.

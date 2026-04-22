@@ -17,6 +17,19 @@ The goal of this pass is to make future implementation work easy to grow, test, 
 - Add GitHub Actions for CI and release packaging.
 - Avoid shipping product behavior before the better-diff design is settled.
 
+## Product direction
+
+The current planned UX is documented in [docs/diff-review-spec.md](diff-review-spec.md).
+
+Highlights from the current direction:
+
+- primary command: `/diff`
+- default shortcut: `ctrl+space`
+- tree-inspired diff navigator with foldable files and hunks
+- vim-style keyboard navigation
+- `ctrl+g` opens the selected diff region in `nvim` / `$VISUAL` / `$EDITOR`
+- returning from the editor should restore the diff UI state
+
 ## Current scaffold shape
 
 ### Current files
@@ -96,8 +109,10 @@ Once the extension has real functionality and package metadata is finalized, the
 
 ## Next implementation milestones
 
-1. Decide whether the extension should override built-in tool rendering, intercept tool results, or both.
+1. Build the normalized review data model for session-based `edit` and `write` mutations.
 2. Add pure diff-formatting helpers with golden tests.
-3. Add integration-style tests around representative `edit`/`write` output.
-4. Add user-facing configuration for verbosity and fallback behavior.
-5. Remove `private: true` and enable npm publishing when the package is ready.
+3. Prototype the tree-inspired `/diff` navigator component with foldable files and hunks.
+4. Add external-editor adapter handling for `ctrl+g` line-targeted jumps and return-to-review flow.
+5. Add integration-style tests around representative `edit`/`write` output and navigation state restoration.
+6. Add user-facing configuration for keymap, verbosity, and fallback editor behavior.
+7. Remove `private: true` and enable npm publishing when the package is ready.
