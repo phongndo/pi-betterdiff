@@ -666,9 +666,9 @@ export class DiffReviewComponent implements Component {
     const prefix = this.theme.fg("dim", row.prefix);
     let content: string;
     if (row.kind === "file") {
-      content = `${this.detailFoldMarker(row)}${this.theme.fg("toolTitle", row.file.path)} ${this.statText(row.file)} ${this.theme.fg("muted", `${row.file.hunks.length} hunk${row.file.hunks.length === 1 ? "" : "s"}`)}`;
+      content = `${this.detailFoldMarker(row)}${this.theme.fg("toolTitle", row.file.path)} ${this.statText(row.file)} ${this.hunkCountText(row.file.hunks.length)}`;
     } else if (row.kind === "hunk") {
-      content = `${this.detailFoldMarker(row)}${this.theme.fg("borderAccent", row.hunk.header)} ${this.theme.fg("dim", row.hunk.path)}`;
+      content = `${this.detailFoldMarker(row)}${this.formatHunkLabel(row.hunk)} ${this.theme.fg("dim", row.hunk.path)}`;
     } else {
       content = `  ${this.renderDiffLine(row.text, row.hunk.path)}`;
     }
@@ -683,6 +683,27 @@ export class DiffReviewComponent implements Component {
     return this.foldedDetailIds.has(row.id)
       ? this.theme.fg("accent", "⊞ ")
       : this.theme.fg("accent", "⊟ ");
+  }
+
+  private formatHunkLabel(hunk: ReviewHunk): string {
+    return [
+      this.formatHunkRegion(hunk.header),
+      this.theme.fg("warning", hunk.toolName),
+      this.statText(hunk),
+    ].join("  ");
+  }
+
+  private formatHunkRegion(header: string): string {
+    const region = /^(.*?)(?:\s{2,}|$)/u.exec(header)?.[1] ?? header;
+    const match = /^(lines?)\s+(\d+)(?:-(\d+))?$/u.exec(region);
+    if (!match) return this.theme.fg("borderAccent", region);
+
+    const label = match[1] ?? "line";
+    const start = match[2] ?? "";
+    const end = match[3];
+    return end
+      ? `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", start)}${this.theme.fg("muted", "-")}${this.theme.fg("borderAccent", end)}`
+      : `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", start)}`;
   }
 
   private renderDiffLine(line: string, filePath: string): string {
@@ -1023,10 +1044,13 @@ export class DiffReviewComponent implements Component {
   }
 
   private summaryText(): string {
-    return this.theme.fg(
-      "muted",
-      `${this.model.turns.length} turn${this.model.turns.length === 1 ? "" : "s"} • ${this.model.totalFiles} file${this.model.totalFiles === 1 ? "" : "s"} • ${this.model.totalHunks} hunk${this.model.totalHunks === 1 ? "" : "s"} • +${this.model.additions} -${this.model.removals}`,
-    );
+    return [
+      this.theme.fg(
+        "muted",
+        `${this.model.turns.length} turn${this.model.turns.length === 1 ? "" : "s"} • ${this.model.totalFiles} file${this.model.totalFiles === 1 ? "" : "s"} • ${this.model.totalHunks} hunk${this.model.totalHunks === 1 ? "" : "s"} •`,
+      ),
+      this.statText(this.model),
+    ].join(" ");
   }
 
   private statusText(): string {
@@ -1044,15 +1068,16 @@ export class DiffReviewComponent implements Component {
     return `${this.theme.fg("toolDiffAdded", `+${stats.additions}`)} ${this.theme.fg("toolDiffRemoved", `-${stats.removals}`)}`;
   }
 
+  private hunkCountText(hunkCount: number): string {
+    return `${this.theme.fg("warning", String(hunkCount))} ${this.theme.fg("muted", `hunk${hunkCount === 1 ? "" : "s"}`)}`;
+  }
+
   private fileHunkText(turn: ReviewTurn): string {
     const hunkCount = turn.files.reduce(
       (total, file) => total + file.hunks.length,
       0,
     );
-    return this.theme.fg(
-      "muted",
-      `${turn.files.length} file${turn.files.length === 1 ? "" : "s"} ${hunkCount} hunk${hunkCount === 1 ? "" : "s"}`,
-    );
+    return `${this.theme.fg("warning", String(turn.files.length))} ${this.theme.fg("muted", `file${turn.files.length === 1 ? "" : "s"}`)} ${this.hunkCountText(hunkCount)}`;
   }
 
   private turnLabel(turn: ReviewTurn): string {
