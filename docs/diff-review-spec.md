@@ -112,8 +112,8 @@ The navigator should support vim-like motions by default.
 - `l` — expand current item or dive into child rows
 - `gg` — jump to top
 - `G` — jump to bottom
-- `enter` — open the selected changed file / hunk / diff line in the external editor
-- `q` / `esc` — close the diff UI from anywhere
+- `enter` — open a scoped actions menu for the selected turn / file / hunk / diff line
+- `q` / `esc` — close the diff UI from anywhere, or close the scoped actions menu when it is open
 
 ### Nice-to-have motions
 
@@ -164,6 +164,8 @@ Longer-term, the extension may support richer adapters for editors like:
 - `subl file:line:column`
 
 ### Return flow
+
+The scoped `enter` actions menu may also expose an explicit open-in-editor action, but `enter` itself must not jump directly into the file.
 
 After the editor exits, the user should land back in the diff review UI with:
 
@@ -237,6 +239,7 @@ Implemented in the first UI pass:
 - unified tree with inline files, hunks, and diff body lines for the selected turn
 - fold/expand navigation for tree branches
 - review-only behavior; branch navigation/rewind stays in pi's native `/tree`
+- `enter` scoped actions menu for turn/file/hunk/diff-line rows, including generated summaries, custom summary instructions, native `/tree` handoff, and edit-hunk undo at the selected scope
 - `ctrl+g` external-editor jump to the selected hunk line
 
 Still to harden:

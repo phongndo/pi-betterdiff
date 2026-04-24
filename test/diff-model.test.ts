@@ -92,6 +92,63 @@ describe("buildReviewModel", () => {
     ).toEqual([2, 11]);
   });
 
+  it("keeps the full normalized user prompt for expanded action views", () => {
+    const longPrompt =
+      `${"summarize these changes ".repeat(12)}final instruction`.trim();
+    const entries: SessionEntry[] = [
+      {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: "2026-04-23T00:00:00.000Z",
+        message: { role: "user", content: longPrompt, timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "a1",
+        parentId: "u1",
+        timestamp: "2026-04-23T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-edit",
+              name: "edit",
+              arguments: { path: "src/a.ts" },
+            },
+          ],
+          api: "test-api",
+          provider: "test-provider",
+          model: "test-model",
+          usage,
+          stopReason: "toolUse",
+          timestamp: 2,
+        },
+      },
+      {
+        type: "message",
+        id: "t1",
+        parentId: "a1",
+        timestamp: "2026-04-23T00:00:02.000Z",
+        message: {
+          role: "toolResult",
+          toolCallId: "call-edit",
+          toolName: "edit",
+          isError: false,
+          content: [{ type: "text", text: "ok" }],
+          details: { diff: " 1 keep\n+2 added", firstChangedLine: 2 },
+          timestamp: 3,
+        },
+      },
+    ];
+
+    const model = buildReviewModel(entries);
+
+    expect(longPrompt.length).toBeGreaterThan(200);
+    expect(model.turns[0]?.prompt).toBe(longPrompt);
+  });
+
   it("builds a compressed diff-producing turn tree from session branches", () => {
     const u1: SessionEntry = {
       type: "message",

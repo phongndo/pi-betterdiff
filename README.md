@@ -14,6 +14,7 @@ The extension now includes an initial `/diff` UI prototype for reviewing agent-p
 - `/diff` command that opens a tree-inspired session diff navigator
 - branch-aware tree of diff-producing user turns that opens on the active session head, stays flat for linear history, indents only at forks, and marks the active branch
 - unified review tree with inline changed files, hunks, and syntax-highlighted diff lines for the selected turn, plus file jumps via `[f` / `]f`
+- `enter` scoped actions menu with summaries, native `/tree` handoff, and undo actions for the selected turn/file/hunk/diff line
 - `ctrl+g` external-editor handoff for the selected diff hunk
 
 ## Repo layout

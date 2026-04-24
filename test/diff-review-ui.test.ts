@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { KeybindingsManager, Theme } from "@mariozechner/pi-coding-agent";
 import type { TUI } from "@mariozechner/pi-tui";
 import { describe, expect, it } from "vitest";
@@ -8,7 +11,10 @@ import type {
   ReviewModel,
   ReviewTurn,
 } from "../src/diff/model.js";
-import { DiffReviewComponent } from "../src/render/diff-review-ui.js";
+import {
+  DiffReviewComponent,
+  type DiffReviewAction,
+} from "../src/render/diff-review-ui.js";
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -177,6 +183,228 @@ describe("DiffReviewComponent", () => {
       "<selectedBg>› └─ ⊟ src/a.ts +1 -0 1 hunk</selectedBg>",
     );
     expect(rendered).toContain("  • user: change file +1 -0 1 file 1 hunk");
+  });
+
+  it("opens a scoped action menu on enter instead of opening a file", () => {
+    const enterAlsoMatchesExternalEditor = {
+      matches: (data: string, id: string) =>
+        data === "\r" && id === "app.editor.external",
+    } as unknown as KeybindingsManager;
+    const component = createComponent(
+      buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 7,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+              },
+            ],
+          },
+        ],
+      }),
+      theme,
+      () => {},
+      enterAlsoMatchesExternalEditor,
+    );
+
+    component.handleInput("\r");
+    const rendered = renderComponent(component);
+
+    expect(rendered).toContain("Actions · turn 1");
+    expect(rendered).toContain("Prompt:");
+    expect(rendered).toContain("change file");
+    expect(rendered).toContain(
+      "Generate summary — Ask the agent to summarize this selected diff scope",
+    );
+    expect(rendered).toContain(
+      "Custom summary… — Add focus instructions before generating the summary",
+    );
+    expect(rendered).toContain(
+      "Jump to native /tree — Close BetterDiff and hand off to pi's native tree navigator",
+    );
+    expect(rendered).toContain(
+      "Undo this turn — user: change file · 1 edit hunk / 1 file",
+    );
+    expect(rendered).not.toContain("Undo path to root");
+    expect(rendered).not.toContain("File no longer exists");
+  });
+
+  it("wraps the full selected prompt in the action menu", () => {
+    const prompt =
+      "start of a very long BetterDiff prompt " +
+      "with enough words to wrap across several narrow terminal lines " +
+      "while preserving the final important instruction";
+    const component = createComponent(
+      buildReviewModel({
+        prompt,
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 7,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    component.handleInput("\r");
+    const rendered = renderComponent(component, 72);
+
+    expect(rendered).toContain("Actions · turn 1");
+    expect(rendered).toContain("Prompt:");
+    expect(rendered).toContain("start of a very long BetterDiff prompt");
+    expect(rendered).toContain("important instruction");
+    expect(rendered).not.toContain("Actions · turn 1: start of a very long");
+  });
+
+  it("returns a generate-summary action from the scoped action menu", () => {
+    let action: DiffReviewAction | undefined;
+    const component = createComponent(buildPluralModel(), theme, (result) => {
+      action = result;
+    });
+
+    component.handleInput("\r");
+    component.handleInput("\r");
+
+    expect(action?.type).toBe("summarize");
+    if (action?.type !== "summarize") return;
+    expect(action.custom).toBe(false);
+    expect(action.summary.title).toBe("turn 1: change many files");
+    expect(action.summary.body).toContain("Prompt: change many files");
+    expect(action.summary.body).toContain("File: src/a.ts");
+    expect(action.summary.body).toContain("+7 changed");
+  });
+
+  it("returns a native-tree action from the scoped action menu", () => {
+    let action: DiffReviewAction | undefined;
+    const component = createComponent(buildPluralModel(), theme, (result) => {
+      action = result;
+    });
+
+    component.handleInput("\r");
+    component.handleInput("j");
+    component.handleInput("j");
+    component.handleInput("\r");
+
+    expect(action).toEqual({
+      type: "native-tree",
+      entryId: "turn-1:user",
+      label: "user: change many files",
+    });
+  });
+
+  it("cancels the scoped action menu without closing the diff review", () => {
+    let closeCount = 0;
+    const component = createComponent(buildPluralModel(), theme, (action) => {
+      if (action.type === "close") closeCount += 1;
+    });
+
+    component.handleInput("\r");
+    component.handleInput("\x1b");
+    const rendered = renderComponent(component);
+
+    expect(closeCount).toBe(0);
+    expect(rendered).not.toContain("Actions ·");
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>",
+    );
+  });
+
+  it("offers undo-scoped file actions from the enter menu", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("l");
+    component.handleInput("\r");
+    const rendered = renderComponent(component);
+
+    expect(rendered).toContain("Actions · file src/a.ts");
+    expect(rendered).toContain(
+      "Undo this file in this turn — src/a.ts · 2 edit hunks / 1 file",
+    );
+    expect(rendered).toContain(
+      "Undo this turn — user: change many files · 2 edit hunks / 1 file",
+    );
+  });
+
+  it("confirms undo-scoped hunk actions from the enter menu", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("l");
+    component.handleInput("l");
+    component.handleInput("\r");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("Actions · hunk src/a.ts:7");
+    expect(rendered).toContain(
+      "Undo this hunk — src/a.ts · 1 edit hunk / 1 file",
+    );
+
+    component.handleInput("j");
+    component.handleInput("j");
+    component.handleInput("j");
+    component.handleInput("\r");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("Actions · confirm undo this hunk");
+    expect(rendered).toContain(
+      "Confirm undo this hunk — Reverse 1 edit hunk / 1 file in the working tree",
+    );
+  });
+
+  it("undoes selected edit hunks after confirmation", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "betterdiff-undo-"));
+    try {
+      writeFileSync(join(cwd, "a.ts"), "before\nnew\nafter\n", "utf8");
+      const component = createComponent(
+        buildReviewModel({
+          files: [
+            {
+              path: "a.ts",
+              hunks: [
+                {
+                  jumpLine: 2,
+                  newLines: 1,
+                  additions: 1,
+                  removals: 1,
+                  toolName: "edit",
+                  bodyLines: [" 1 before", "-2 old", "+2 new", " 3 after"],
+                },
+              ],
+            },
+          ],
+        }),
+        theme,
+        () => {},
+        keybindings,
+        cwd,
+      );
+
+      component.handleInput("\r");
+      component.handleInput("j");
+      component.handleInput("j");
+      component.handleInput("j");
+      component.handleInput("\r");
+      component.handleInput("\r");
+
+      expect(readFileSync(join(cwd, "a.ts"), "utf8")).toBe(
+        "before\nold\nafter\n",
+      );
+      expect(renderComponent(component)).toContain(
+        "Undo this turn: reversed 1 edit hunk in 1 file.",
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("keeps turn navigation on turns without opening details until l enters them", () => {
@@ -437,19 +665,22 @@ function renderModel(model: ReviewModel, renderTheme: Theme = theme): string {
 function createComponent(
   model: ReviewModel,
   renderTheme: Theme = theme,
+  done: (action: DiffReviewAction) => void = () => {},
+  componentKeybindings: KeybindingsManager = keybindings,
+  cwd: string = process.cwd(),
 ): DiffReviewComponent {
   return new DiffReviewComponent(
     model,
-    process.cwd(),
+    cwd,
     tui,
     renderTheme,
-    keybindings,
-    () => {},
+    componentKeybindings,
+    done,
   );
 }
 
-function renderComponent(component: DiffReviewComponent): string {
-  return component.render(200).join("\n");
+function renderComponent(component: DiffReviewComponent, width = 200): string {
+  return component.render(width).join("\n");
 }
 
 function countOccurrences(text: string, search: string): number {
@@ -462,6 +693,7 @@ interface TestHunk {
   additions: number;
   removals: number;
   toolName: "edit" | "write";
+  bodyLines?: string[];
 }
 
 interface TestFile {
@@ -672,7 +904,7 @@ function buildReviewTurn({
       newStart: hunk.jumpLine,
       newLines: hunk.newLines,
       jumpLine: hunk.jumpLine,
-      bodyLines: [`+${hunk.jumpLine} changed`],
+      bodyLines: hunk.bodyLines ?? [`+${hunk.jumpLine} changed`],
       additions: hunk.additions,
       removals: hunk.removals,
     }));

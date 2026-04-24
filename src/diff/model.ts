@@ -355,9 +355,8 @@ function createTurn(
     userEntryId: entry.id,
     parentEntryId: entry.parentId,
     timestamp: entry.timestamp,
-    prompt: summarizeText(
+    prompt: normalizePromptText(
       entry.message.role === "user" ? extractText(entry.message.content) : "",
-      200,
     ),
     files: [],
     children: [],
@@ -612,10 +611,8 @@ function extractText(content: unknown): string {
     .join("\n");
 }
 
-function summarizeText(text: string, maxLength: number): string {
-  const normalized = text.replace(/\s+/gu, " ").trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+function normalizePromptText(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
 }
 
 function splitDisplayLines(content: string): string[] {

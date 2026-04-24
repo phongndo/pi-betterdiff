@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { KeybindingsManager, Theme } from "@mariozechner/pi-coding-agent";
 import {
@@ -11,6 +11,7 @@ import {
 import {
   matchesKey,
   truncateToWidth,
+  wrapTextWithAnsi,
   type Component,
   type TUI,
 } from "@mariozechner/pi-tui";
@@ -22,7 +23,23 @@ import type {
   ReviewTurn,
 } from "../diff/model.js";
 
-export type DiffReviewAction = { type: "close" };
+export interface DiffReviewSummaryRequest {
+  title: string;
+  body: string;
+}
+
+export type DiffReviewAction =
+  | { type: "close" }
+  | {
+      type: "summarize";
+      custom: boolean;
+      summary: DiffReviewSummaryRequest;
+    }
+  | {
+      type: "native-tree";
+      entryId: string;
+      label: string;
+    };
 
 interface Gutter {
   position: number;
@@ -75,6 +92,22 @@ type RenderRow = TurnRow | FileRow | HunkRow | DiffLineRow;
 type DetailRow = FileRow | HunkRow | DiffLineRow;
 type FoldableDetailRow = FileRow | HunkRow;
 
+const MAX_SUMMARY_BODY_CHARS = 24_000;
+
+interface ActionMenuItem {
+  id: string;
+  label: string;
+  description: string;
+  run: () => void;
+}
+
+interface ActionMenuState {
+  title: string;
+  prompt: string;
+  items: ActionMenuItem[];
+  selectedIndex: number;
+}
+
 export class DiffReviewComponent implements Component {
   private readonly turnsById = new Map<string, ReviewTurn>();
   private readonly parentById = new Map<string, string | undefined>();
@@ -94,6 +127,7 @@ export class DiffReviewComponent implements Component {
   private pendingBracket: "[" | "]" | undefined;
   private pendingBracketTimer: ReturnType<typeof setTimeout> | undefined;
   private notice: string | undefined;
+  private actionMenu: ActionMenuState | undefined;
 
   constructor(
     private readonly model: ReviewModel,
@@ -132,7 +166,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. enter/${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -142,6 +176,7 @@ export class DiffReviewComponent implements Component {
         truncateToWidth(`  ${this.theme.fg("warning", this.notice)}`, width),
       );
     }
+    lines.push(...this.renderActionMenu(width));
     lines.push(...border.render(width));
     lines.push("");
 
@@ -172,7 +207,7 @@ export class DiffReviewComponent implements Component {
     let rows = this.getRows();
     this.ensureSelectionVisible(rows);
     rows = this.getRows();
-    const maxBodyLines = this.getBodyBudgetLines();
+    const maxBodyLines = this.getBodyBudgetLines(width);
     this.lastPageSize = Math.max(1, maxBodyLines - 1);
     const selectedRowIndex = Math.max(
       0,
@@ -201,9 +236,76 @@ export class DiffReviewComponent implements Component {
     return lines;
   }
 
-  private getBodyBudgetLines(): number {
-    const reservedLines = this.notice ? 10 : 9;
+  private getBodyBudgetLines(width: number): number {
+    const reservedLines =
+      9 + (this.notice ? 1 : 0) + this.getActionMenuLineCount(width);
     return Math.max(5, this.tui.terminal.rows - reservedLines);
+  }
+
+  private getActionMenuLineCount(width: number): number {
+    const menu = this.actionMenu;
+    if (!menu) return 0;
+    return menu.items.length + 2 + this.getActionMenuPromptLineCount(width);
+  }
+
+  private getActionMenuPromptLineCount(width: number): number {
+    const prompt = this.actionMenu?.prompt.trim();
+    if (!prompt) return 0;
+    return (
+      1 + wrapTextWithAnsi(prompt, this.getActionMenuPromptWidth(width)).length
+    );
+  }
+
+  private getActionMenuPromptWidth(width: number): number {
+    return Math.max(10, width - 4);
+  }
+
+  private renderActionMenu(width: number): string[] {
+    const menu = this.actionMenu;
+    if (!menu) return [];
+
+    const lines: string[] = [];
+    lines.push(
+      truncateToWidth(
+        `  ${this.theme.bold("Actions")} ${this.theme.fg("muted", "·")} ${this.theme.fg("accent", menu.title)}`,
+        width,
+      ),
+    );
+
+    const prompt = menu.prompt.trim();
+    if (prompt) {
+      lines.push(truncateToWidth(this.theme.fg("muted", "  Prompt:"), width));
+      for (const promptLine of wrapTextWithAnsi(
+        prompt,
+        this.getActionMenuPromptWidth(width),
+      )) {
+        lines.push(
+          truncateToWidth(`    ${this.theme.fg("text", promptLine)}`, width),
+        );
+      }
+    }
+
+    for (let index = 0; index < menu.items.length; index++) {
+      const item = menu.items[index];
+      if (!item) continue;
+      const selected = index === menu.selectedIndex;
+      const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
+      const label = selected ? this.theme.bold(item.label) : item.label;
+      let line = `  ${cursor}${label}${this.theme.fg("muted", ` — ${item.description}`)}`;
+      if (selected) line = this.theme.bg("selectedBg", line);
+      lines.push(truncateToWidth(line, width));
+    }
+
+    lines.push(
+      truncateToWidth(
+        this.theme.fg(
+          "muted",
+          "  ↑/↓ or j/k: move. enter: run action. esc/q: back.",
+        ),
+        width,
+      ),
+    );
+    return lines;
   }
 
   private ensureSelectionVisible(rows: readonly RenderRow[]): void {
@@ -244,11 +346,16 @@ export class DiffReviewComponent implements Component {
   handleInput(data: string): void {
     this.notice = undefined;
 
+    if (this.actionMenu) {
+      this.clearPendingBracket();
+      this.pendingG = false;
+      this.handleActionMenuInput(data);
+      return;
+    }
+
     if (
       this.pendingBracket &&
-      (this.keybindings.matches(data, "tui.select.cancel") ||
-        data === "q" ||
-        data === "Q")
+      (this.matchesCancel(data) || data === "q" || data === "Q")
     ) {
       this.clearPendingBracket();
     }
@@ -264,7 +371,7 @@ export class DiffReviewComponent implements Component {
       this.moveToHunk(pendingBracket === "]" ? 1 : -1);
     }
 
-    if (this.keybindings.matches(data, "tui.select.cancel")) {
+    if (this.matchesCancel(data)) {
       this.done({ type: "close" });
       return;
     }
@@ -280,31 +387,22 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
-    if (this.keybindings.matches(data, "app.editor.external")) {
+    if (this.matchesExternalEditor(data)) {
       this.openSelectedHunk();
       this.tui.requestRender(true);
       return;
     }
 
-    if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
+    if (this.matchesSelectUp(data) || data === "k") {
       this.moveSelection(-1);
-    } else if (
-      this.keybindings.matches(data, "tui.select.down") ||
-      data === "j"
-    ) {
+    } else if (this.matchesSelectDown(data) || data === "j") {
       this.moveSelection(1);
-    } else if (
-      this.keybindings.matches(data, "tui.select.pageUp") ||
-      matchesKey(data, "ctrl+u")
-    ) {
+    } else if (this.matchesPageUp(data) || matchesKey(data, "ctrl+u")) {
       this.moveSelection(-Math.max(1, this.lastPageSize));
-    } else if (
-      this.keybindings.matches(data, "tui.select.pageDown") ||
-      matchesKey(data, "ctrl+d")
-    ) {
+    } else if (this.matchesPageDown(data) || matchesKey(data, "ctrl+d")) {
       this.moveSelection(Math.max(1, this.lastPageSize));
-    } else if (this.keybindings.matches(data, "tui.select.confirm")) {
-      this.openSelectedHunk();
+    } else if (this.matchesConfirm(data)) {
+      this.openActionMenu();
     } else if (
       data === "h" ||
       this.keybindings.matches(data, "app.tree.foldOrUp")
@@ -346,6 +444,335 @@ export class DiffReviewComponent implements Component {
 
     this.pendingG = false;
     this.tui.requestRender();
+  }
+
+  private handleActionMenuInput(data: string): void {
+    if (this.matchesExternalEditor(data)) {
+      this.actionMenu = undefined;
+      this.openSelectedHunk();
+      this.tui.requestRender(true);
+      return;
+    }
+
+    if (this.matchesCancel(data) || data === "q" || data === "Q") {
+      this.actionMenu = undefined;
+      this.tui.requestRender();
+      return;
+    }
+
+    if (this.matchesSelectUp(data) || data === "k") {
+      this.moveActionMenuSelection(-1);
+    } else if (this.matchesSelectDown(data) || data === "j") {
+      this.moveActionMenuSelection(1);
+    } else if (this.matchesConfirm(data)) {
+      this.runSelectedActionMenuItem();
+    } else {
+      return;
+    }
+
+    this.tui.requestRender();
+  }
+
+  private moveActionMenuSelection(delta: number): void {
+    const menu = this.actionMenu;
+    if (!menu || menu.items.length === 0) return;
+    menu.selectedIndex = clamp(
+      menu.selectedIndex + delta,
+      0,
+      menu.items.length - 1,
+    );
+  }
+
+  private runSelectedActionMenuItem(): void {
+    const menu = this.actionMenu;
+    if (!menu) return;
+    const item = menu.items[menu.selectedIndex];
+    if (!item) return;
+    this.actionMenu = undefined;
+    item.run();
+  }
+
+  private openActionMenu(): void {
+    const row = this.getSelectedRow();
+    if (!row) {
+      this.notice = "No diff row is selected.";
+      return;
+    }
+
+    const items = this.actionMenuItemsForRow(row);
+    if (items.length === 0) {
+      this.notice = "No actions available for this row.";
+      return;
+    }
+
+    this.actionMenu = {
+      title: this.actionMenuTitle(row),
+      prompt: row.turn.prompt || "(empty prompt)",
+      items,
+      selectedIndex: 0,
+    };
+  }
+
+  private actionMenuTitle(row: RenderRow): string {
+    if (row.kind === "turn") return `turn ${row.turn.ordinal}`;
+    if (row.kind === "file") return `file ${row.file.path}`;
+    if (row.kind === "hunk")
+      return `hunk ${row.hunk.path}:${row.hunk.jumpLine}`;
+    return `diff line ${row.hunk.path}:${row.hunk.jumpLine}`;
+  }
+
+  private actionMenuItemsForRow(row: RenderRow): ActionMenuItem[] {
+    const items: ActionMenuItem[] = [
+      {
+        id: "summarize-scope",
+        label: "Generate summary",
+        description: "Ask the agent to summarize this selected diff scope",
+        run: () =>
+          this.done({
+            type: "summarize",
+            custom: false,
+            summary: this.summaryRequestForRow(row),
+          }),
+      },
+      {
+        id: "custom-summarize-scope",
+        label: "Custom summary…",
+        description: "Add focus instructions before generating the summary",
+        run: () =>
+          this.done({
+            type: "summarize",
+            custom: true,
+            summary: this.summaryRequestForRow(row),
+          }),
+      },
+      {
+        id: "native-tree",
+        label: "Jump to native /tree",
+        description:
+          "Close BetterDiff and hand off to pi's native tree navigator",
+        run: () =>
+          this.done({
+            type: "native-tree",
+            entryId: row.turn.userEntryId,
+            label: this.turnLabel(row.turn),
+          }),
+      },
+    ];
+
+    if (row.kind === "hunk" || row.kind === "diff") {
+      this.addUndoAction(items, "undo-hunk", "Undo this hunk", row.hunk.path, [
+        row.hunk,
+      ]);
+    }
+
+    if (row.kind === "file" || row.kind === "hunk" || row.kind === "diff") {
+      this.addUndoAction(
+        items,
+        "undo-file-in-turn",
+        "Undo this file in this turn",
+        row.file.path,
+        row.file.hunks,
+      );
+    }
+
+    this.addUndoAction(
+      items,
+      "undo-turn",
+      "Undo this turn",
+      this.turnLabel(row.turn),
+      this.hunksForTurn(row.turn),
+    );
+
+    return items;
+  }
+
+  private summaryRequestForRow(row: RenderRow): DiffReviewSummaryRequest {
+    return {
+      title: this.summaryTitleForRow(row),
+      body: truncateSummaryBody(this.summaryBodyForRow(row)),
+    };
+  }
+
+  private summaryTitleForRow(row: RenderRow): string {
+    if (row.kind === "turn") {
+      return `turn ${row.turn.ordinal}: ${row.turn.prompt || "(empty prompt)"}`;
+    }
+    return this.actionMenuTitle(row);
+  }
+
+  private summaryBodyForRow(row: RenderRow): string {
+    if (row.kind === "turn") return this.summaryForTurn(row.turn);
+    if (row.kind === "file") return this.summaryForFile(row.file, row.turn);
+    if (row.kind === "hunk")
+      return this.summaryForHunk(row.hunk, row.file, row.turn);
+    return this.summaryForHunk(row.hunk, row.file, row.turn);
+  }
+
+  private summaryForTurn(turn: ReviewTurn): string {
+    return [
+      `Scope: turn ${turn.ordinal}`,
+      `Prompt: ${turn.prompt || "(empty prompt)"}`,
+      `Stats: +${turn.additions} -${turn.removals}`,
+      `Files: ${turn.files.length}`,
+      "",
+      ...turn.files.flatMap((file) => this.summaryLinesForFile(file)),
+    ].join("\n");
+  }
+
+  private summaryForFile(file: ReviewFile, turn: ReviewTurn): string {
+    return [
+      `Scope: file ${file.path}`,
+      `Turn: ${turn.prompt || "(empty prompt)"}`,
+      `Stats: +${file.additions} -${file.removals}`,
+      "",
+      ...this.summaryLinesForFile(file),
+    ].join("\n");
+  }
+
+  private summaryForHunk(
+    hunk: ReviewHunk,
+    file: ReviewFile,
+    turn: ReviewTurn,
+  ): string {
+    return [
+      `Scope: hunk ${hunk.path}:${hunk.jumpLine}`,
+      `Turn: ${turn.prompt || "(empty prompt)"}`,
+      `File: ${file.path}`,
+      `Tool: ${hunk.toolName}`,
+      `Stats: +${hunk.additions} -${hunk.removals}`,
+      "",
+      ...this.summaryLinesForHunk(hunk),
+    ].join("\n");
+  }
+
+  private summaryLinesForFile(file: ReviewFile): string[] {
+    return [
+      `File: ${file.path} (+${file.additions} -${file.removals}, ${file.hunks.length} hunk${file.hunks.length === 1 ? "" : "s"})`,
+      ...file.hunks.flatMap((hunk) => this.summaryLinesForHunk(hunk)),
+      "",
+    ];
+  }
+
+  private summaryLinesForHunk(hunk: ReviewHunk): string[] {
+    return [
+      `  Hunk: ${hunk.path}:${hunk.jumpLine} ${hunk.toolName} (+${hunk.additions} -${hunk.removals})`,
+      ...hunk.bodyLines.map((line) => `    ${line}`),
+    ];
+  }
+
+  private addUndoAction(
+    items: ActionMenuItem[],
+    id: string,
+    label: string,
+    description: string,
+    hunks: readonly ReviewHunk[],
+  ): void {
+    const reversibleHunks = this.reversibleHunks(hunks);
+    if (reversibleHunks.length === 0) return;
+
+    items.push({
+      id,
+      label,
+      description: `${description} · ${this.undoSummary(reversibleHunks)}`,
+      run: () => this.showUndoConfirmation(label, reversibleHunks),
+    });
+  }
+
+  private showUndoConfirmation(
+    label: string,
+    hunks: readonly ReviewHunk[],
+  ): void {
+    this.actionMenu = {
+      title: `confirm ${label.toLowerCase()}`,
+      prompt: this.actionMenu?.prompt ?? "",
+      selectedIndex: 0,
+      items: [
+        {
+          id: "confirm-undo",
+          label: `Confirm ${label.toLowerCase()}`,
+          description: `Reverse ${this.undoSummary(hunks)} in the working tree`,
+          run: () => this.undoHunks(hunks, label),
+        },
+        {
+          id: "cancel-undo",
+          label: "Cancel",
+          description: "Leave files unchanged",
+          run: () => {},
+        },
+      ],
+    };
+  }
+
+  private undoHunks(hunks: readonly ReviewHunk[], label: string): void {
+    try {
+      const result = undoEditHunks(this.cwd, hunks);
+      this.notice = `${label}: reversed ${result.hunks} edit hunk${result.hunks === 1 ? "" : "s"} in ${result.files} file${result.files === 1 ? "" : "s"}.`;
+    } catch (error) {
+      this.notice = `Undo failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private reversibleHunks(hunks: readonly ReviewHunk[]): ReviewHunk[] {
+    return hunks.filter((hunk) => hunk.toolName === "edit");
+  }
+
+  private undoSummary(hunks: readonly ReviewHunk[]): string {
+    const paths = new Set(hunks.map((hunk) => hunk.path));
+    return `${hunks.length} edit hunk${hunks.length === 1 ? "" : "s"} / ${paths.size} file${paths.size === 1 ? "" : "s"}`;
+  }
+
+  private hunksForTurn(turn: ReviewTurn): ReviewHunk[] {
+    return turn.files.flatMap((file) => file.hunks);
+  }
+
+  private matchesConfirm(data: string): boolean {
+    return (
+      this.keybindings.matches(data, "tui.select.confirm") ||
+      matchesKey(data, "enter")
+    );
+  }
+
+  private matchesCancel(data: string): boolean {
+    return (
+      this.keybindings.matches(data, "tui.select.cancel") ||
+      matchesKey(data, "escape") ||
+      matchesKey(data, "ctrl+c")
+    );
+  }
+
+  private matchesSelectUp(data: string): boolean {
+    return (
+      this.keybindings.matches(data, "tui.select.up") || matchesKey(data, "up")
+    );
+  }
+
+  private matchesSelectDown(data: string): boolean {
+    return (
+      this.keybindings.matches(data, "tui.select.down") ||
+      matchesKey(data, "down")
+    );
+  }
+
+  private matchesPageUp(data: string): boolean {
+    return (
+      this.keybindings.matches(data, "tui.select.pageUp") ||
+      matchesKey(data, "pageUp")
+    );
+  }
+
+  private matchesPageDown(data: string): boolean {
+    return (
+      this.keybindings.matches(data, "tui.select.pageDown") ||
+      matchesKey(data, "pageDown")
+    );
+  }
+
+  private matchesExternalEditor(data: string): boolean {
+    if (matchesKey(data, "enter")) return false;
+    return (
+      this.keybindings.matches(data, "app.editor.external") ||
+      matchesKey(data, "ctrl+g")
+    );
   }
 
   private indexModel(): void {
@@ -1134,7 +1561,10 @@ export class DiffReviewComponent implements Component {
   }
 
   private openSelectedHunk(): void {
-    const hunk = this.findHunkForRow(this.getSelectedRow());
+    this.openHunk(this.findHunkForRow(this.getSelectedRow()));
+  }
+
+  private openHunk(hunk: ReviewHunk | undefined): void {
     if (!hunk) {
       this.notice = "Select a changed file, hunk, or diff line to open it.";
       return;
@@ -1206,6 +1636,11 @@ interface ParsedDiffLine {
   content: string;
 }
 
+function truncateSummaryBody(body: string): string {
+  if (body.length <= MAX_SUMMARY_BODY_CHARS) return body;
+  return `${body.slice(0, MAX_SUMMARY_BODY_CHARS)}\n\n[BetterDiff summary context truncated at ${MAX_SUMMARY_BODY_CHARS} characters]`;
+}
+
 function parseDiffLine(line: string): ParsedDiffLine | undefined {
   const match = /^([+\- ])(\s*\d*)\s?(.*)$/u.exec(line);
   if (!match?.[1]) return undefined;
@@ -1220,6 +1655,171 @@ function parseDiffLine(line: string): ParsedDiffLine | undefined {
     prefix: `${marker}${lineNumber}${content ? " " : ""}`,
     content,
   };
+}
+
+interface UndoEditResult {
+  hunks: number;
+  files: number;
+}
+
+interface ReverseHunkEdit {
+  hunk: ReviewHunk;
+  currentLines: string[];
+  restoredLines: string[];
+}
+
+function undoEditHunks(
+  cwd: string,
+  hunks: readonly ReviewHunk[],
+): UndoEditResult {
+  const editsByPath = new Map<string, ReverseHunkEdit[]>();
+
+  for (const hunk of hunks) {
+    if (hunk.toolName !== "edit") continue;
+    const edit = reverseEditForHunk(hunk);
+    const edits = editsByPath.get(hunk.path) ?? [];
+    edits.push(edit);
+    editsByPath.set(hunk.path, edits);
+  }
+
+  if (editsByPath.size === 0) {
+    throw new Error("No reversible edit hunks in this scope.");
+  }
+
+  const nextContentByPath = new Map<string, string>();
+  for (const [filePath, edits] of editsByPath) {
+    const absolutePath = resolve(cwd, filePath);
+    if (!existsSync(absolutePath)) {
+      throw new Error(`File no longer exists: ${filePath}`);
+    }
+
+    const rawContent = readFileSync(absolutePath, "utf8");
+    const lineEnding = detectLineEnding(rawContent);
+    let normalizedContent = normalizeLineEndings(rawContent);
+
+    for (const edit of [...edits].reverse()) {
+      normalizedContent = replaceLineSequenceOnce(
+        normalizedContent,
+        edit.currentLines,
+        edit.restoredLines,
+        edit.hunk,
+      );
+    }
+
+    nextContentByPath.set(
+      absolutePath,
+      restoreLineEndings(normalizedContent, lineEnding),
+    );
+  }
+
+  for (const [absolutePath, content] of nextContentByPath) {
+    writeFileSync(absolutePath, content, "utf8");
+  }
+
+  return {
+    hunks: [...editsByPath.values()].reduce(
+      (total, edits) => total + edits.length,
+      0,
+    ),
+    files: editsByPath.size,
+  };
+}
+
+function reverseEditForHunk(hunk: ReviewHunk): ReverseHunkEdit {
+  const currentLines: string[] = [];
+  const restoredLines: string[] = [];
+
+  for (const line of hunk.bodyLines) {
+    const parsed = parseDiffLine(line);
+    if (!parsed) {
+      throw new Error(
+        `Cannot parse diff line in ${hunk.path}:${hunk.jumpLine}`,
+      );
+    }
+
+    if (parsed.marker === "+") {
+      currentLines.push(parsed.content);
+    } else if (parsed.marker === "-") {
+      restoredLines.push(parsed.content);
+    } else {
+      currentLines.push(parsed.content);
+      restoredLines.push(parsed.content);
+    }
+  }
+
+  if (currentLines.length === 0) {
+    throw new Error(
+      `Cannot undo ${hunk.path}:${hunk.jumpLine}; the current-side hunk is empty or lacks context.`,
+    );
+  }
+
+  return { hunk, currentLines, restoredLines };
+}
+
+function replaceLineSequenceOnce(
+  content: string,
+  searchLines: readonly string[],
+  replacementLines: readonly string[],
+  hunk: ReviewHunk,
+): string {
+  const lines = content.split("\n");
+  const matches: number[] = [];
+
+  for (let index = 0; index <= lines.length - searchLines.length; index++) {
+    if (lineSequenceMatches(lines, searchLines, index)) {
+      matches.push(index);
+    }
+  }
+
+  if (matches.length === 0) {
+    throw new Error(
+      `Current text for ${hunk.path}:${hunk.jumpLine} was not found. The file may have changed after the edit.`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Current text for ${hunk.path}:${hunk.jumpLine} is ambiguous (${matches.length} matches).`,
+    );
+  }
+
+  const matchIndex = matches[0] ?? 0;
+  const nextLines = [
+    ...lines.slice(0, matchIndex),
+    ...replacementLines,
+    ...lines.slice(matchIndex + searchLines.length),
+  ];
+  if (nextLines.length === 1 && nextLines[0] === "") return "";
+  return nextLines.join("\n");
+}
+
+function lineSequenceMatches(
+  lines: readonly string[],
+  searchLines: readonly string[],
+  startIndex: number,
+): boolean {
+  for (let index = 0; index < searchLines.length; index++) {
+    if (lines[startIndex + index] !== searchLines[index]) return false;
+  }
+  return true;
+}
+
+function detectLineEnding(content: string): "\n" | "\r\n" {
+  const crlfIndex = content.indexOf("\r\n");
+  const lfIndex = content.indexOf("\n");
+  if (lfIndex === -1) return "\n";
+  if (crlfIndex === -1) return "\n";
+  return crlfIndex <= lfIndex ? "\r\n" : "\n";
+}
+
+function normalizeLineEndings(content: string): string {
+  return content.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+}
+
+function restoreLineEndings(
+  content: string,
+  lineEnding: "\n" | "\r\n",
+): string {
+  return lineEnding === "\r\n" ? content.replace(/\n/gu, "\r\n") : content;
 }
 
 function openExternalEditor(
