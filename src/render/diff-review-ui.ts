@@ -24,8 +24,6 @@ import type {
 
 export type DiffReviewAction = { type: "close" };
 
-type FocusMode = "tree" | "details";
-
 interface Gutter {
   position: number;
   show: boolean;
@@ -33,6 +31,8 @@ interface Gutter {
 
 interface TurnRow {
   id: string;
+  kind: "turn";
+  selectable: true;
   turn: ReviewTurn;
   indent: number;
   showConnector: boolean;
@@ -41,35 +41,39 @@ interface TurnRow {
   isVirtualRootChild: boolean;
 }
 
-interface FileDetailRow {
+interface FileRow {
   id: string;
   kind: "file";
   selectable: true;
+  turn: ReviewTurn;
   prefix: string;
   file: ReviewFile;
 }
 
-interface HunkDetailRow {
+interface HunkRow {
   id: string;
   kind: "hunk";
   selectable: true;
+  turn: ReviewTurn;
   prefix: string;
   file: ReviewFile;
   hunk: ReviewHunk;
 }
 
-interface DiffDetailRow {
+interface DiffLineRow {
   id: string;
   kind: "diff";
   selectable: true;
+  turn: ReviewTurn;
   prefix: string;
   file: ReviewFile;
   hunk: ReviewHunk;
   text: string;
 }
 
-type DetailRow = FileDetailRow | HunkDetailRow | DiffDetailRow;
-type SelectableDetailRow = FileDetailRow | HunkDetailRow | DiffDetailRow;
+type RenderRow = TurnRow | FileRow | HunkRow | DiffLineRow;
+type DetailRow = FileRow | HunkRow | DiffLineRow;
+type FoldableDetailRow = FileRow | HunkRow;
 
 export class DiffReviewComponent implements Component {
   private readonly turnsById = new Map<string, ReviewTurn>();
@@ -77,18 +81,15 @@ export class DiffReviewComponent implements Component {
   private readonly childrenById = new Map<string, string[]>();
   private readonly activeTurnIds = new Set<string>();
   private readonly activeDescendantMemo = new Map<string, boolean>();
-  private readonly foldedIds = new Set<string>();
+  private readonly foldedBranchIds = new Set<string>();
   private readonly foldedDetailIds = new Set<string>();
   private visibleParentById = new Map<string, string | undefined>();
   private visibleChildrenById = new Map<string | undefined, string[]>();
   private multipleVisibleRoots = false;
-  private cachedTreeRows: TurnRow[] | undefined;
-  private selectedTurnId: string | undefined;
-  private selectedDetailId: string | undefined;
-  private focus: FocusMode = "tree";
-  private detailScrollOffset = 0;
-  private lastTreePageSize = 5;
-  private lastDetailsPageSize = 5;
+  private cachedRows: RenderRow[] | undefined;
+  private selectedId: string | undefined;
+  private detailTurnId: string | undefined;
+  private lastPageSize = 5;
   private pendingG = false;
   private pendingBracket: "[" | "]" | undefined;
   private pendingBracketTimer: ReturnType<typeof setTimeout> | undefined;
@@ -104,11 +105,12 @@ export class DiffReviewComponent implements Component {
   ) {
     this.indexModel();
     this.foldDetailHunksByDefault();
-    this.selectedTurnId = this.firstSelectableTurnId();
+    this.detailTurnId = this.preferredHeadTurnId();
+    this.selectedId = this.detailTurnId;
   }
 
   invalidate(): void {
-    this.invalidateTreeRows();
+    this.invalidateRows();
   }
 
   render(width: number): string[] {
@@ -128,7 +130,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→: page. tab: ${this.focus === "tree" ? "diff details" : "tree"}. enter: toggle/open. [/]: hunk. [f/]f: file. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. enter/${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -165,55 +167,28 @@ export class DiffReviewComponent implements Component {
       return lines;
     }
 
-    const bodyBudget = this.getBodyBudgetLines();
-    const treeRows = this.getTreeRows();
-    this.ensureSelectedTurnVisible(treeRows);
-    const treeHeight = this.calculateTreeHeight(treeRows.length, bodyBudget);
-    this.lastTreePageSize = Math.max(1, treeHeight - 1);
-    const treeStart = this.calculateSelectedWindowStart(
-      treeRows,
-      this.selectedTurnId,
-      treeHeight,
-    );
-    const treeEnd = Math.min(treeRows.length, treeStart + treeHeight);
-
-    for (let index = treeStart; index < treeEnd; index++) {
-      const row = treeRows[index];
-      if (!row) continue;
-      lines.push(this.renderTurnRow(row, width));
-    }
-
-    const detailsHeaderLines = 1;
-    const detailsHeight = Math.max(
+    let rows = this.getRows();
+    this.ensureSelectionVisible(rows);
+    rows = this.getRows();
+    const maxBodyLines = this.getBodyBudgetLines();
+    this.lastPageSize = Math.max(1, maxBodyLines - 1);
+    const selectedRowIndex = Math.max(
       0,
-      bodyBudget -
-        Math.max(treeHeight, treeRows.length === 0 ? 1 : 0) -
-        detailsHeaderLines,
+      rows.findIndex((row) => row.id === this.selectedId),
     );
-    if (detailsHeight > 0) {
-      lines.push(this.renderDetailsHeader(width));
-      this.lastDetailsPageSize = Math.max(1, detailsHeight - 1);
-      const detailRows = this.getDetailRows();
-      this.ensureDetailSelection(detailRows);
-      this.ensureDetailScroll(detailRows, detailsHeight);
-      const detailEnd = Math.min(
-        detailRows.length,
-        this.detailScrollOffset + detailsHeight,
-      );
-      for (let index = this.detailScrollOffset; index < detailEnd; index++) {
-        const row = detailRows[index];
-        if (!row) continue;
-        lines.push(this.renderDetailRow(row, width));
-      }
+    const startIndex = Math.max(
+      0,
+      Math.min(
+        selectedRowIndex - Math.floor(maxBodyLines / 2),
+        rows.length - maxBodyLines,
+      ),
+    );
+    const endIndex = Math.min(rows.length, startIndex + maxBodyLines);
 
-      if (detailRows.length === 0) {
-        lines.push(
-          truncateToWidth(
-            this.theme.fg("muted", "  No changed files on selected turn."),
-            width,
-          ),
-        );
-      }
+    for (let index = startIndex; index < endIndex; index++) {
+      const row = rows[index];
+      if (!row) continue;
+      lines.push(this.renderRow(row, width));
     }
 
     lines.push(
@@ -229,32 +204,14 @@ export class DiffReviewComponent implements Component {
     return Math.max(5, this.tui.terminal.rows - reservedLines);
   }
 
-  private calculateTreeHeight(rowCount: number, bodyBudget: number): number {
-    if (rowCount === 0) return 0;
-    if (bodyBudget <= 7) return Math.min(rowCount, bodyBudget);
-    const maxTreeHeight = Math.max(3, Math.min(10, Math.floor(bodyBudget / 3)));
-    return Math.min(rowCount, maxTreeHeight);
-  }
-
-  private renderDetailsHeader(width: number): string {
-    const turn = this.getSelectedTurn();
-    const prompt = turn?.prompt || "(no selected prompt)";
-    const focusText =
-      this.focus === "details"
-        ? this.theme.fg("accent", "diff focus")
-        : this.theme.fg("muted", "tree focus");
-    return truncateToWidth(
-      `  ${this.theme.fg("border", "─")} ${this.theme.bold("Changes for selected prompt")} ${this.theme.fg("muted", "—")} ${focusText} ${this.theme.fg("dim", prompt)}`,
-      width,
-    );
-  }
-
-  private ensureSelectedTurnVisible(rows: readonly TurnRow[]): void {
-    if (rows.some((row) => row.id === this.selectedTurnId)) return;
+  private ensureSelectionVisible(rows: readonly RenderRow[]): void {
+    if (rows.some((row) => row.selectable && row.id === this.selectedId)) {
+      return;
+    }
 
     const preferredHeadId = this.preferredHeadTurnId();
-    const preferredVisibleRow = rows.find((row) => row.id === preferredHeadId);
-    this.selectTurn(preferredVisibleRow?.id ?? rows[rows.length - 1]?.id);
+    const preferredRow = rows.find((row) => row.id === preferredHeadId);
+    this.selectRow(preferredRow?.id ?? rows[rows.length - 1]?.id);
   }
 
   private setPendingBracket(bracket: "[" | "]"): void {
@@ -263,7 +220,6 @@ export class DiffReviewComponent implements Component {
     this.pendingBracketTimer = setTimeout(() => {
       const pendingBracket = this.consumePendingBracket();
       if (!pendingBracket) return;
-      this.focus = "details";
       this.moveToHunk(pendingBracket === "]" ? 1 : -1);
       this.tui.requestRender();
     }, 160);
@@ -303,7 +259,6 @@ export class DiffReviewComponent implements Component {
       return;
     }
     if (pendingBracket) {
-      this.focus = "details";
       this.moveToHunk(pendingBracket === "]" ? 1 : -1);
     }
 
@@ -318,7 +273,7 @@ export class DiffReviewComponent implements Component {
     }
 
     if (data === "\t") {
-      this.toggleFocus();
+      this.toggleTurnFileJump();
       this.tui.requestRender();
       return;
     }
@@ -330,60 +285,42 @@ export class DiffReviewComponent implements Component {
     }
 
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
-      this.moveFocusedSelection(-1);
+      this.moveSelection(-1);
     } else if (
       this.keybindings.matches(data, "tui.select.down") ||
       data === "j"
     ) {
-      this.moveFocusedSelection(1);
+      this.moveSelection(1);
     } else if (this.keybindings.matches(data, "tui.select.pageUp")) {
-      this.pageFocusedSelection(-1);
+      this.moveSelection(-Math.max(1, this.lastPageSize));
     } else if (this.keybindings.matches(data, "tui.select.pageDown")) {
-      this.pageFocusedSelection(1);
+      this.moveSelection(Math.max(1, this.lastPageSize));
     } else if (this.keybindings.matches(data, "tui.select.confirm")) {
-      if (this.focus === "details") {
-        this.confirmDetailSelection();
-      }
+      this.openSelectedHunk();
     } else if (
       data === "h" ||
       this.keybindings.matches(data, "app.tree.foldOrUp")
     ) {
-      if (this.focus === "details") {
-        this.moveDetailParent();
-      } else {
-        this.collapseOrMoveParent();
-      }
+      this.moveParentOrCollapse();
     } else if (
       data === "l" ||
       this.keybindings.matches(data, "app.tree.unfoldOrDown")
     ) {
-      if (this.focus === "details") {
-        this.moveDetailChild();
-      } else {
-        this.expandOrMoveChild();
-      }
+      this.moveChildOrExpand();
     } else if (data === "c" || data === "C") {
-      if (this.focus === "details") {
-        this.collapseAllDetails();
-      } else {
-        this.collapseAllBranches();
-      }
+      this.collapseSelectedScope();
     } else if (data === "e" || data === "E") {
-      if (this.focus === "details") {
-        this.expandAllDetails();
-      } else {
-        this.expandAllBranches();
-      }
+      this.expandSelectedScope();
     } else if (data === "]" || data === "[") {
       this.setPendingBracket(data);
       this.pendingG = false;
       this.tui.requestRender();
       return;
     } else if (data === "G") {
-      this.selectFocusedLast();
+      this.selectLast();
     } else if (data === "g") {
       if (this.pendingG) {
-        this.selectFocusedFirst();
+        this.selectFirst();
         this.pendingG = false;
       } else {
         this.pendingG = true;
@@ -391,9 +328,9 @@ export class DiffReviewComponent implements Component {
       this.tui.requestRender();
       return;
     } else if (matchesKey(data, "left")) {
-      this.pageFocusedSelection(-1);
+      this.moveSelection(-Math.max(1, this.lastPageSize));
     } else if (matchesKey(data, "right")) {
-      this.pageFocusedSelection(1);
+      this.moveSelection(Math.max(1, this.lastPageSize));
     } else {
       this.pendingG = false;
       return;
@@ -443,10 +380,6 @@ export class DiffReviewComponent implements Component {
     }
   }
 
-  private firstSelectableTurnId(): string | undefined {
-    return this.preferredHeadTurnId() ?? this.model.roots[0]?.id;
-  }
-
   private preferredHeadTurnId(): string | undefined {
     return (
       this.model.activeTurnIds[this.model.activeTurnIds.length - 1] ??
@@ -454,17 +387,17 @@ export class DiffReviewComponent implements Component {
     );
   }
 
-  private getTreeRows(): TurnRow[] {
-    this.cachedTreeRows ??= this.buildTreeRows();
-    return this.cachedTreeRows;
+  private getRows(): RenderRow[] {
+    this.cachedRows ??= this.buildRows();
+    return this.cachedRows;
   }
 
-  private invalidateTreeRows(): void {
-    this.cachedTreeRows = undefined;
+  private invalidateRows(): void {
+    this.cachedRows = undefined;
   }
 
-  private buildTreeRows(): TurnRow[] {
-    const rows: TurnRow[] = [];
+  private buildRows(): RenderRow[] {
+    const rows: RenderRow[] = [];
     const rootIds = this.model.roots.map((root) => root.id);
     const orderedRootIds = this.sortActiveFirst(rootIds);
     this.visibleParentById = new Map<string, string | undefined>();
@@ -491,7 +424,7 @@ export class DiffReviewComponent implements Component {
   }
 
   private addTurnRows(
-    rows: TurnRow[],
+    rows: RenderRow[],
     turnId: string,
     indent: number,
     justBranched: boolean,
@@ -505,19 +438,26 @@ export class DiffReviewComponent implements Component {
     if (!turn) return;
 
     this.visibleParentById.set(turnId, visibleParentId);
-    rows.push({
+    const turnRow: TurnRow = {
       id: turn.id,
+      kind: "turn",
+      selectable: true,
       turn,
       indent,
       showConnector,
       isLast,
       gutters: [...gutters],
       isVirtualRootChild,
-    });
+    };
+    rows.push(turnRow);
+
+    if (this.detailTurnId === turn.id) {
+      this.addDetailRows(rows, turn, turnRow);
+    }
 
     const childIds = this.sortActiveFirst(this.childrenById.get(turn.id) ?? []);
     this.visibleChildrenById.set(turnId, childIds);
-    if (this.foldedIds.has(turn.id)) return;
+    if (this.foldedBranchIds.has(turn.id)) return;
 
     const multipleChildren = childIds.length > 1;
     const childIndent = multipleChildren
@@ -551,6 +491,61 @@ export class DiffReviewComponent implements Component {
     }
   }
 
+  private addDetailRows(
+    rows: RenderRow[],
+    turn: ReviewTurn,
+    turnRow: TurnRow,
+  ): void {
+    const basePrefix = this.prefixForTurnChildRows(turnRow);
+    for (let fileIndex = 0; fileIndex < turn.files.length; fileIndex++) {
+      const file = turn.files[fileIndex];
+      if (!file) continue;
+      const fileIsLast = fileIndex === turn.files.length - 1;
+      const filePrefix = `${basePrefix}${fileIsLast ? "└─ " : "├─ "}`;
+      const fileChildPrefix = `${basePrefix}${fileIsLast ? "   " : "│  "}`;
+      rows.push({
+        id: file.id,
+        kind: "file",
+        selectable: true,
+        turn,
+        prefix: filePrefix,
+        file,
+      });
+      if (this.foldedDetailIds.has(file.id)) continue;
+
+      for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
+        const hunk = file.hunks[hunkIndex];
+        if (!hunk) continue;
+        const hunkIsLast = hunkIndex === file.hunks.length - 1;
+        const hunkPrefix = `${fileChildPrefix}${hunkIsLast ? "└─ " : "├─ "}`;
+        const diffPrefix = `${fileChildPrefix}${hunkIsLast ? "   " : "│  "}`;
+        rows.push({
+          id: hunk.id,
+          kind: "hunk",
+          selectable: true,
+          turn,
+          prefix: hunkPrefix,
+          file,
+          hunk,
+        });
+        if (this.foldedDetailIds.has(hunk.id)) continue;
+
+        for (let index = 0; index < hunk.bodyLines.length; index++) {
+          rows.push({
+            id: `${hunk.id}:line:${index}`,
+            kind: "diff",
+            selectable: true,
+            turn,
+            prefix: diffPrefix,
+            file,
+            hunk,
+            text: hunk.bodyLines[index] ?? "",
+          });
+        }
+      }
+    }
+  }
+
   private sortActiveFirst(ids: readonly string[]): string[] {
     return [...ids].sort((left, right) => {
       const leftActive = this.subtreeContainsActiveTurn(left);
@@ -572,59 +567,14 @@ export class DiffReviewComponent implements Component {
     return contains;
   }
 
-  private getDetailRows(): DetailRow[] {
-    const turn = this.getSelectedTurn();
-    if (!turn) return [];
-
-    const rows: DetailRow[] = [];
-    for (let fileIndex = 0; fileIndex < turn.files.length; fileIndex++) {
-      const file = turn.files[fileIndex];
-      if (!file) continue;
-      rows.push({
-        id: file.id,
-        kind: "file",
-        selectable: true,
-        prefix: "",
-        file,
-      });
-      if (this.foldedDetailIds.has(file.id)) continue;
-
-      for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
-        const hunk = file.hunks[hunkIndex];
-        if (!hunk) continue;
-        const hunkIsLast = hunkIndex === file.hunks.length - 1;
-        const hunkPrefix = hunkIsLast ? "└─ " : "├─ ";
-        rows.push({
-          id: hunk.id,
-          kind: "hunk",
-          selectable: true,
-          prefix: hunkPrefix,
-          file,
-          hunk,
-        });
-        if (this.foldedDetailIds.has(hunk.id)) continue;
-
-        const diffPrefix = hunkIsLast ? "   " : "│  ";
-        for (let index = 0; index < hunk.bodyLines.length; index++) {
-          rows.push({
-            id: `${hunk.id}:line:${index}`,
-            kind: "diff",
-            selectable: true,
-            prefix: diffPrefix,
-            file,
-            hunk,
-            text: hunk.bodyLines[index] ?? "",
-          });
-        }
-      }
-    }
-    return rows;
+  private renderRow(row: RenderRow, width: number): string {
+    if (row.kind === "turn") return this.renderTurnRow(row, width);
+    return this.renderDetailRow(row, width);
   }
 
   private renderTurnRow(row: TurnRow, width: number): string {
-    const selected = row.id === this.selectedTurnId;
-    const focused = selected && this.focus === "tree";
-    const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
+    const selected = row.id === this.selectedId;
+    const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
     const prefix = this.theme.fg("dim", this.prefixForTurnRow(row));
     const foldMarker = this.rootFoldMarker(row);
     const pathMarker = this.activeTurnIds.has(row.id)
@@ -633,19 +583,17 @@ export class DiffReviewComponent implements Component {
     const prompt = row.turn.prompt || "(empty prompt)";
     const text = `${foldMarker}${pathMarker}${this.theme.fg("accent", "user: ")}${this.theme.fg("text", prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
     let line = cursor + prefix + (selected ? this.theme.bold(text) : text);
-    if (focused) line = this.theme.bg("selectedBg", line);
+    if (selected) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width);
   }
 
   private prefixForTurnRow(row: TurnRow): string {
-    const displayIndent = this.multipleVisibleRoots
-      ? Math.max(0, row.indent - 1)
-      : row.indent;
+    const displayIndent = this.displayIndentForTurn(row);
     const connector = row.showConnector && !row.isVirtualRootChild;
     const connectorPosition = connector ? displayIndent - 1 : -1;
     const totalChars = displayIndent * 3;
     const prefixChars: string[] = [];
-    const isFolded = this.foldedIds.has(row.id);
+    const isFolded = this.foldedBranchIds.has(row.id);
 
     for (let index = 0; index < totalChars; index++) {
       const level = Math.floor(index / 3);
@@ -661,7 +609,7 @@ export class DiffReviewComponent implements Component {
           prefixChars.push(row.isLast ? "└" : "├");
         } else if (posInLevel === 1) {
           prefixChars.push(
-            isFolded ? "⊞" : this.isFoldable(row.id) ? "⊟" : "─",
+            isFolded ? "⊞" : this.isBranchFoldable(row.id) ? "⊟" : "─",
           );
         } else {
           prefixChars.push(" ");
@@ -674,16 +622,41 @@ export class DiffReviewComponent implements Component {
     return prefixChars.join("");
   }
 
+  private prefixForTurnChildRows(row: TurnRow): string {
+    const displayIndent = this.displayIndentForTurn(row);
+    const connector = row.showConnector && !row.isVirtualRootChild;
+    const connectorPosition = connector ? displayIndent - 1 : -1;
+    const segments: string[] = [];
+
+    for (let level = 0; level < displayIndent; level++) {
+      const gutter = row.gutters.find(
+        (candidate) => candidate.position === level,
+      );
+      if (gutter) {
+        segments.push(gutter.show ? "│  " : "   ");
+      } else if (connector && level === connectorPosition) {
+        segments.push(row.isLast ? "   " : "│  ");
+      } else {
+        segments.push("   ");
+      }
+    }
+
+    return segments.join("");
+  }
+
+  private displayIndentForTurn(row: TurnRow): number {
+    return this.multipleVisibleRoots ? Math.max(0, row.indent - 1) : row.indent;
+  }
+
   private rootFoldMarker(row: TurnRow): string {
     const showsFoldInConnector = row.showConnector && !row.isVirtualRootChild;
-    if (!this.foldedIds.has(row.id) || showsFoldInConnector) return "";
+    if (!this.foldedBranchIds.has(row.id) || showsFoldInConnector) return "";
     return this.theme.fg("accent", "⊞ ");
   }
 
   private renderDetailRow(row: DetailRow, width: number): string {
-    const selected = row.selectable && row.id === this.selectedDetailId;
-    const focused = selected && this.focus === "details";
-    const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
+    const selected = row.id === this.selectedId;
+    const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
     const prefix = this.theme.fg("dim", row.prefix);
     let content: string;
     if (row.kind === "file") {
@@ -695,16 +668,12 @@ export class DiffReviewComponent implements Component {
     }
 
     let line = cursor + prefix + content;
-    if (focused) line = this.theme.bg("selectedBg", line);
+    if (selected) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width);
   }
 
-  private detailFoldMarker(row: FileDetailRow | HunkDetailRow): string {
-    const hasChildren =
-      row.kind === "file"
-        ? row.file.hunks.length > 0
-        : row.hunk.bodyLines.length > 0;
-    if (!hasChildren) return "  ";
+  private detailFoldMarker(row: FoldableDetailRow): string {
+    if (!this.isDetailFoldable(row)) return "  ";
     return this.foldedDetailIds.has(row.id)
       ? this.theme.fg("accent", "⊞ ")
       : this.theme.fg("accent", "⊟ ");
@@ -742,52 +711,23 @@ export class DiffReviewComponent implements Component {
     );
   }
 
-  private moveFocusedSelection(delta: number): void {
-    if (this.focus === "details") {
-      this.moveDetailSelection(delta);
-    } else {
-      this.moveTurnSelection(delta);
-    }
-  }
-
-  private pageFocusedSelection(direction: -1 | 1): void {
-    if (this.focus === "details") {
-      this.moveDetailSelection(
-        direction * Math.max(1, this.lastDetailsPageSize),
-      );
-    } else {
-      this.moveTurnSelection(direction * Math.max(1, this.lastTreePageSize));
-    }
-  }
-
-  private moveTurnSelection(delta: number): void {
-    const rows = this.getTreeRows();
+  private moveSelection(delta: number): void {
+    const rows = this.getRows();
     if (rows.length === 0) return;
     const currentIndex = Math.max(
       0,
-      rows.findIndex((row) => row.id === this.selectedTurnId),
+      rows.findIndex((row) => row.id === this.selectedId),
     );
     const nextIndex = clamp(currentIndex + delta, 0, rows.length - 1);
-    this.selectTurn(rows[nextIndex]?.id);
-  }
-
-  private moveDetailSelection(delta: number): void {
-    const selectable = this.getDetailRows().filter(isSelectableDetailRow);
-    if (selectable.length === 0) return;
-    const currentIndex = Math.max(
-      0,
-      selectable.findIndex((row) => row.id === this.selectedDetailId),
-    );
-    const nextIndex = clamp(currentIndex + delta, 0, selectable.length - 1);
-    this.selectedDetailId = selectable[nextIndex]?.id;
+    this.selectRow(rows[nextIndex]?.id);
   }
 
   private moveToHunk(delta: number): void {
-    const hunks = this.getAllHunksForSelectedTurn();
+    const turn = this.getSelectedTurn();
+    if (!turn) return;
+    const hunks = this.getAllHunks(turn);
     if (hunks.length === 0) return;
-    const selectedHunkId = this.findHunkForDetailRow(
-      this.getSelectedDetailRow(),
-    )?.id;
+    const selectedHunkId = this.findHunkForRow(this.getSelectedRow())?.id;
     const currentIndex = hunks.findIndex((hunk) => hunk.id === selectedHunkId);
     const nextIndex =
       currentIndex === -1
@@ -797,132 +737,227 @@ export class DiffReviewComponent implements Component {
         : clamp(currentIndex + delta, 0, hunks.length - 1);
     const hunk = hunks[nextIndex];
     if (!hunk) return;
+    this.detailTurnId = turn.id;
     this.foldedDetailIds.delete(hunk.fileId);
-    this.focus = "details";
-    this.selectedDetailId = hunk.id;
+    this.selectedId = hunk.id;
+    this.invalidateRows();
   }
 
   private moveToFile(delta: number): void {
-    const files = this.getDetailRows().filter(isFileDetailRow);
-    if (files.length === 0) return;
+    const turn = this.getSelectedTurn();
+    if (!turn || turn.files.length === 0) return;
 
-    const selectedFileId = this.getSelectedDetailRow()?.file.id;
-    const currentIndex = files.findIndex(
-      (row) => row.file.id === selectedFileId,
+    const selectedRow = this.getSelectedRow();
+    const selectedFileId =
+      selectedRow && selectedRow.kind !== "turn"
+        ? selectedRow.file.id
+        : undefined;
+    const currentIndex = turn.files.findIndex(
+      (file) => file.id === selectedFileId,
     );
     const nextIndex =
       currentIndex === -1
         ? delta > 0
           ? 0
-          : files.length - 1
-        : clamp(currentIndex + delta, 0, files.length - 1);
-    this.focus = "details";
-    this.selectedDetailId = files[nextIndex]?.id;
+          : turn.files.length - 1
+        : clamp(currentIndex + delta, 0, turn.files.length - 1);
+    const file = turn.files[nextIndex];
+    if (!file) return;
+    this.detailTurnId = turn.id;
+    this.selectedId = file.id;
+    this.invalidateRows();
   }
 
-  private moveDetailParent(): void {
-    const selectedRow = this.getSelectedDetailRow();
-    if (!selectedRow) return;
+  private moveParentOrCollapse(): void {
+    const row = this.getSelectedRow();
+    if (!row) return;
 
-    if (selectedRow.kind === "file") {
-      if (this.isDetailExpanded(selectedRow)) {
-        this.foldedDetailIds.add(selectedRow.id);
-      }
+    if (row.kind === "diff") {
+      this.selectRow(row.hunk.id);
       return;
     }
 
-    if (selectedRow.kind === "hunk") {
-      if (this.isDetailExpanded(selectedRow)) {
-        this.foldedDetailIds.add(selectedRow.id);
+    if (row.kind === "hunk") {
+      if (this.isDetailExpanded(row)) {
+        this.foldedDetailIds.add(row.id);
+        this.invalidateRows();
       } else {
-        this.selectedDetailId = selectedRow.file.id;
+        this.selectRow(row.file.id);
       }
       return;
     }
 
-    this.selectedDetailId = selectedRow.hunk.id;
+    if (row.kind === "file") {
+      if (this.isDetailExpanded(row)) {
+        this.foldedDetailIds.add(row.id);
+        this.invalidateRows();
+      } else {
+        this.selectRow(row.turn.id);
+      }
+      return;
+    }
+
+    if (this.isBranchFoldable(row.id) && !this.foldedBranchIds.has(row.id)) {
+      this.foldedBranchIds.add(row.id);
+      this.invalidateRows();
+      return;
+    }
+
+    const parentId = this.parentById.get(row.id);
+    if (parentId) this.selectRow(parentId);
   }
 
-  private moveDetailChild(): void {
-    const selectedRow = this.getSelectedDetailRow();
-    if (!selectedRow) return;
+  private moveChildOrExpand(): void {
+    const row = this.getSelectedRow();
+    if (!row) return;
 
-    if (selectedRow.kind === "file") {
-      if (this.foldedDetailIds.has(selectedRow.id)) {
-        this.foldedDetailIds.delete(selectedRow.id);
+    if (row.kind === "turn") {
+      const firstFile = row.turn.files[0];
+      if (firstFile) {
+        this.detailTurnId = row.turn.id;
+        this.selectedId = firstFile.id;
+        this.invalidateRows();
         return;
       }
-      this.selectedDetailId = selectedRow.file.hunks[0]?.id ?? selectedRow.id;
-      return;
-    }
 
-    if (selectedRow.kind === "hunk") {
-      if (this.foldedDetailIds.has(selectedRow.id)) {
-        this.foldedDetailIds.delete(selectedRow.id);
+      if (this.foldedBranchIds.has(row.id)) {
+        this.foldedBranchIds.delete(row.id);
+        this.invalidateRows();
         return;
       }
-      this.selectedDetailId =
-        selectedRow.hunk.bodyLines.length > 0
-          ? `${selectedRow.hunk.id}:line:0`
-          : selectedRow.id;
-    }
-  }
-
-  private confirmDetailSelection(): void {
-    const selectedRow = this.getSelectedDetailRow();
-    if (!selectedRow) return;
-    if (selectedRow.kind === "diff") {
-      this.openSelectedHunk();
+      const childId = this.firstVisibleChildId(row.id);
+      if (childId) this.selectRow(childId);
       return;
     }
-    this.toggleDetailFold(selectedRow);
-  }
 
-  private toggleDetailFold(row: FileDetailRow | HunkDetailRow): void {
-    if (!this.isDetailFoldable(row)) return;
-    if (this.foldedDetailIds.has(row.id)) {
-      this.foldedDetailIds.delete(row.id);
-    } else {
-      this.foldedDetailIds.add(row.id);
+    if (row.kind === "file") {
+      if (this.foldedDetailIds.has(row.id)) {
+        this.foldedDetailIds.delete(row.id);
+        this.invalidateRows();
+        return;
+      }
+      this.selectRow(row.file.hunks[0]?.id ?? row.id);
+      return;
+    }
+
+    if (row.kind === "hunk") {
+      if (this.foldedDetailIds.has(row.id)) {
+        this.foldedDetailIds.delete(row.id);
+        this.invalidateRows();
+        return;
+      }
+      this.selectRow(
+        row.hunk.bodyLines.length > 0 ? `${row.hunk.id}:line:0` : row.id,
+      );
     }
   }
 
-  private isDetailExpanded(row: FileDetailRow | HunkDetailRow): boolean {
-    return this.isDetailFoldable(row) && !this.foldedDetailIds.has(row.id);
-  }
-
-  private isDetailFoldable(row: FileDetailRow | HunkDetailRow): boolean {
-    return row.kind === "file"
-      ? row.file.hunks.length > 0
-      : row.hunk.bodyLines.length > 0;
-  }
-
-  private getAllHunksForSelectedTurn(): ReviewHunk[] {
-    const turn = this.getSelectedTurn();
-    if (!turn) return [];
-    return turn.files.flatMap((file) => file.hunks);
-  }
-
-  private selectFocusedFirst(): void {
-    if (this.focus === "details") {
-      const first = this.getDetailRows().find(isSelectableDetailRow);
-      this.selectedDetailId = first?.id;
+  private collapseSelectedScope(): void {
+    const row = this.getSelectedRow();
+    if (!row) return;
+    if (row.kind === "turn") {
+      this.collapseAllBranches();
     } else {
-      this.selectTurn(this.getTreeRows()[0]?.id);
+      this.collapseAllDetails(row.turn);
     }
   }
 
-  private selectFocusedLast(): void {
-    if (this.focus === "details") {
-      const selectable = this.getDetailRows().filter(isSelectableDetailRow);
-      this.selectedDetailId = selectable[selectable.length - 1]?.id;
+  private expandSelectedScope(): void {
+    const row = this.getSelectedRow();
+    if (!row) return;
+    if (row.kind === "turn") {
+      this.expandAllBranches();
     } else {
-      const rows = this.getTreeRows();
-      this.selectTurn(rows[rows.length - 1]?.id);
+      this.expandAllDetails(row.turn);
     }
   }
 
-  private isFoldable(turnId: string): boolean {
+  private collapseAllBranches(): void {
+    this.foldedBranchIds.clear();
+    this.invalidateRows();
+    for (const row of this.getRows()) {
+      if (row.kind === "turn" && this.isBranchFoldable(row.id)) {
+        this.foldedBranchIds.add(row.id);
+      }
+    }
+    this.invalidateRows();
+  }
+
+  private expandAllBranches(): void {
+    this.foldedBranchIds.clear();
+    this.invalidateRows();
+  }
+
+  private collapseAllDetails(turn: ReviewTurn): void {
+    for (const file of turn.files) {
+      this.foldedDetailIds.add(file.id);
+      for (const hunk of file.hunks) {
+        this.foldedDetailIds.add(hunk.id);
+      }
+    }
+    this.invalidateRows();
+  }
+
+  private expandAllDetails(turn: ReviewTurn): void {
+    for (const file of turn.files) {
+      this.foldedDetailIds.delete(file.id);
+      for (const hunk of file.hunks) {
+        this.foldedDetailIds.delete(hunk.id);
+      }
+    }
+    this.invalidateRows();
+  }
+
+  private toggleTurnFileJump(): void {
+    const row = this.getSelectedRow();
+    if (!row) return;
+    if (row.kind === "turn") {
+      const firstFile = row.turn.files[0];
+      if (!firstFile) return;
+      this.detailTurnId = row.turn.id;
+      this.selectedId = firstFile.id;
+      this.invalidateRows();
+      return;
+    }
+    this.selectRow(row.turn.id);
+  }
+
+  private selectFirst(): void {
+    this.selectRow(this.getRows()[0]?.id);
+  }
+
+  private selectLast(): void {
+    const rows = this.getRows();
+    this.selectRow(rows[rows.length - 1]?.id);
+  }
+
+  private selectRow(id: string | undefined): void {
+    if (!id) return;
+    const row = this.getRows().find((candidate) => candidate.id === id);
+    this.selectedId = id;
+    if (row) {
+      const nextDetailTurnId = row.turn.id;
+      if (this.detailTurnId !== nextDetailTurnId) {
+        this.detailTurnId = nextDetailTurnId;
+        this.invalidateRows();
+      }
+    }
+  }
+
+  private getSelectedRow(): RenderRow | undefined {
+    if (!this.selectedId) return undefined;
+    return this.getRows().find((row) => row.id === this.selectedId);
+  }
+
+  private getSelectedTurn(): ReviewTurn | undefined {
+    const selectedRow = this.getSelectedRow();
+    if (selectedRow) return selectedRow.turn;
+    if (this.detailTurnId) return this.turnsById.get(this.detailTurnId);
+    const preferredHeadId = this.preferredHeadTurnId();
+    return preferredHeadId ? this.turnsById.get(preferredHeadId) : undefined;
+  }
+
+  private isBranchFoldable(turnId: string): boolean {
     const children = this.visibleChildrenById.get(turnId);
     if (!children || children.length === 0) return false;
 
@@ -937,160 +972,23 @@ export class DiffReviewComponent implements Component {
     return this.visibleChildrenById.get(turnId)?.[0];
   }
 
-  private collapseOrMoveParent(): void {
-    const turn = this.getSelectedTurn();
-    if (!turn) return;
-
-    if (this.isFoldable(turn.id) && !this.foldedIds.has(turn.id)) {
-      this.foldedIds.add(turn.id);
-      this.invalidateTreeRows();
-      return;
-    }
-    const parentId = this.parentById.get(turn.id);
-    if (parentId) this.selectTurn(parentId);
+  private isDetailExpanded(row: FoldableDetailRow): boolean {
+    return this.isDetailFoldable(row) && !this.foldedDetailIds.has(row.id);
   }
 
-  private expandOrMoveChild(): boolean {
-    const turn = this.getSelectedTurn();
-    if (!turn) return false;
-    if (this.foldedIds.has(turn.id)) {
-      this.foldedIds.delete(turn.id);
-      this.invalidateTreeRows();
-      return true;
-    }
-    const childId = this.firstVisibleChildId(turn.id);
-    if (!childId) return false;
-    this.selectTurn(childId);
-    return true;
+  private isDetailFoldable(row: FoldableDetailRow): boolean {
+    return row.kind === "file"
+      ? row.file.hunks.length > 0
+      : row.hunk.bodyLines.length > 0;
   }
 
-  private collapseAllBranches(): void {
-    this.foldedIds.clear();
-    this.invalidateTreeRows();
-    for (const row of this.getTreeRows()) {
-      if (this.isFoldable(row.id)) this.foldedIds.add(row.id);
-    }
-    this.invalidateTreeRows();
+  private getAllHunks(turn: ReviewTurn): ReviewHunk[] {
+    return turn.files.flatMap((file) => file.hunks);
   }
 
-  private expandAllBranches(): void {
-    this.foldedIds.clear();
-    this.invalidateTreeRows();
-  }
-
-  private collapseAllDetails(): void {
-    const turn = this.getSelectedTurn();
-    if (!turn) return;
-    for (const file of turn.files) {
-      this.foldedDetailIds.add(file.id);
-      for (const hunk of file.hunks) {
-        this.foldedDetailIds.add(hunk.id);
-      }
-    }
-  }
-
-  private expandAllDetails(): void {
-    const turn = this.getSelectedTurn();
-    if (!turn) return;
-    for (const file of turn.files) {
-      this.foldedDetailIds.delete(file.id);
-      for (const hunk of file.hunks) {
-        this.foldedDetailIds.delete(hunk.id);
-      }
-    }
-  }
-
-  private toggleFocus(): void {
-    if (this.focus === "tree") {
-      this.focusDetails();
-    } else {
-      this.focus = "tree";
-    }
-  }
-
-  private focusDetails(): void {
-    const rows = this.getDetailRows();
-    this.ensureDetailSelection(rows);
-    if (rows.some(isSelectableDetailRow)) {
-      this.focus = "details";
-    } else {
-      this.notice = "Selected turn has no diff details.";
-    }
-  }
-
-  private selectTurn(id: string | undefined): void {
-    if (id === this.selectedTurnId) return;
-    this.selectedTurnId = id;
-    this.selectedDetailId = undefined;
-    this.detailScrollOffset = 0;
-  }
-
-  private ensureDetailSelection(rows: readonly DetailRow[]): void {
-    if (
-      rows.some((row) => row.selectable && row.id === this.selectedDetailId)
-    ) {
-      return;
-    }
-    this.selectedDetailId = rows.find(isSelectableDetailRow)?.id;
-    this.detailScrollOffset = 0;
-  }
-
-  private ensureDetailScroll(
-    rows: readonly DetailRow[],
-    viewportHeight: number,
-  ): void {
-    this.detailScrollOffset = clamp(
-      this.detailScrollOffset,
-      0,
-      Math.max(0, rows.length - viewportHeight),
-    );
-    const selectedIndex = rows.findIndex(
-      (row) => row.id === this.selectedDetailId,
-    );
-    if (selectedIndex < 0) return;
-    if (selectedIndex < this.detailScrollOffset) {
-      this.detailScrollOffset = selectedIndex;
-    } else if (selectedIndex >= this.detailScrollOffset + viewportHeight) {
-      this.detailScrollOffset = selectedIndex - viewportHeight + 1;
-    }
-  }
-
-  private calculateSelectedWindowStart(
-    rows: readonly TurnRow[],
-    selectedId: string | undefined,
-    viewportHeight: number,
-  ): number {
-    if (viewportHeight <= 0) return 0;
-    const selectedIndex = Math.max(
-      0,
-      rows.findIndex((row) => row.id === selectedId),
-    );
-    return Math.max(
-      0,
-      Math.min(
-        selectedIndex - Math.floor(viewportHeight / 2),
-        rows.length - viewportHeight,
-      ),
-    );
-  }
-
-  private getSelectedTurn(): ReviewTurn | undefined {
-    if (!this.selectedTurnId) return undefined;
-    return this.turnsById.get(this.selectedTurnId);
-  }
-
-  private getSelectedDetailRow(): SelectableDetailRow | undefined {
-    if (!this.selectedDetailId) return undefined;
-    return this.getDetailRows().find(
-      (row): row is SelectableDetailRow =>
-        row.selectable && row.id === this.selectedDetailId,
-    );
-  }
-
-  private findHunkForDetailRow(
-    row: SelectableDetailRow | undefined,
-  ): ReviewHunk | undefined {
+  private findHunkForRow(row: RenderRow | undefined): ReviewHunk | undefined {
     if (!row) return undefined;
+    if (row.kind === "turn") return this.firstHunk(row.turn);
     if (row.kind === "file") return row.file.hunks[0];
     return row.hunk;
   }
@@ -1105,12 +1003,9 @@ export class DiffReviewComponent implements Component {
   }
 
   private openSelectedHunk(): void {
-    const turn = this.getSelectedTurn();
-    const hunk =
-      this.findHunkForDetailRow(this.getSelectedDetailRow()) ??
-      this.firstHunk(turn);
+    const hunk = this.findHunkForRow(this.getSelectedRow());
     if (!hunk) {
-      this.notice = "Select a diff hunk to open an exact region.";
+      this.notice = "Select a changed file, hunk, or diff line to open it.";
       return;
     }
     this.notice = openExternalEditor(
@@ -1129,19 +1024,14 @@ export class DiffReviewComponent implements Component {
   }
 
   private statusText(): string {
-    const treeRows = this.getTreeRows();
-    const treePosition = Math.max(
+    const rows = this.getRows();
+    const position = Math.max(
       0,
-      treeRows.findIndex((row) => row.id === this.selectedTurnId) + 1,
+      rows.findIndex((row) => row.id === this.selectedId) + 1,
     );
-    const detailRows = this.getDetailRows().filter(isSelectableDetailRow);
-    const detailPosition = Math.max(
-      0,
-      detailRows.findIndex((row) => row.id === this.selectedDetailId) + 1,
-    );
-    const turn = this.getSelectedTurn();
-    if (!turn) return "  (0/0)";
-    return `  tree ${treePosition}/${treeRows.length} • diff ${detailPosition}/${detailRows.length} • ${this.describeTurn(turn)}`;
+    const selectedRow = this.getSelectedRow();
+    if (!selectedRow) return "  (0/0)";
+    return `  (${position}/${rows.length}) ${this.describeRow(selectedRow)}`;
   }
 
   private statText(stats: { additions: number; removals: number }): string {
@@ -1163,17 +1053,16 @@ export class DiffReviewComponent implements Component {
     return `user: ${turn.prompt || "(empty prompt)"}`;
   }
 
-  private describeTurn(turn: ReviewTurn): string {
-    return this.turnLabel(turn);
+  private describeRow(row: RenderRow): string {
+    if (row.kind === "turn") return this.turnLabel(row.turn);
+    if (row.kind === "file") {
+      return `${row.file.path} • ${row.file.hunks.length} hunk${row.file.hunks.length === 1 ? "" : "s"}`;
+    }
+    if (row.kind === "hunk") {
+      return `${row.hunk.path}:${row.hunk.jumpLine} • ${keyText("app.editor.external")} opens here`;
+    }
+    return `${row.hunk.path}:${row.hunk.jumpLine} • diff line`;
   }
-}
-
-function isSelectableDetailRow(row: DetailRow): row is SelectableDetailRow {
-  return row.selectable;
-}
-
-function isFileDetailRow(row: DetailRow): row is FileDetailRow {
-  return row.kind === "file";
 }
 
 interface ParsedDiffLine {

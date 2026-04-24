@@ -25,7 +25,7 @@ Highlights from the current direction:
 
 - primary command: `/diff`
 - tree-inspired navigator where diff-producing user turns stay visually flat during linear continuation, indent only at fork/branch points, and mark the active branch
-- selected-turn detail pane for files, hunks, and diff body scrolling
+- unified tree with inline files, hunks, and diff body scrolling for the selected turn
 - vim-style keyboard navigation
 - `ctrl+g` opens the selected diff region in `nvim` / `$VISUAL` / `$EDITOR`
 - returning from the editor should restore the diff UI state
@@ -36,7 +36,7 @@ Highlights from the current direction:
 
 - `src/index.ts` — pi extension entrypoint registering `/diff`.
 - `src/diff/model.ts` — session-tree mutation normalizer for `edit` and `write` tool results.
-- `src/render/diff-review-ui.ts` — custom TUI component for branch-aware turn navigation plus selected-turn diff details.
+- `src/render/diff-review-ui.ts` — custom TUI component for branch-aware turn navigation plus inline selected-turn diff details.
 - `src/config/` — empty placeholder for future configuration modules.
 - `src/runtime/` — placeholder for future runtime orchestration as behavior grows.
 - `test/` — Vitest coverage for extension registration and diff model normalization.

@@ -31,20 +31,20 @@ The UI should take strong inspiration from pi's `/tree` experience:
 - optimized for fast scanning and review
 - lightweight enough to reopen frequently during a coding session
 
-Like `/tree`, child/sibling relationships should represent the pi session tree. Unlike `/tree`, the visible nodes are filtered to **diff-producing user turns**; changed files and hunks are detail content for the selected turn, not tree children.
+Like `/tree`, child/sibling relationships should represent the pi session tree. BetterDiff extends the same navigable tree with inline review-only children for the selected diff-producing turn's files, hunks, and diff lines.
 
 ## Information hierarchy
 
-The default hierarchy should be:
+The default hierarchy should be one unified tree:
 
 1. **diff-producing user turn tree**
-2. **selected-turn file details**
-3. **selected-turn diff region / hunk details**
-4. syntax-highlighted changed lines / patch body in the detail pane
+2. inline changed files under the selected/open turn
+3. inline diff regions / hunks under each file
+4. syntax-highlighted changed lines under expanded hunks
 
 A BetterDiff tree child is created by pi session ancestry: a later diff-producing user turn descends from an earlier diff-producing user turn, with non-diff turns compressed out. For display, linear continuation stays visually flat; indentation/connectors are introduced only at actual fork points where a diff-producing turn has multiple visible continuations. If the user rewinds/forks a previous turn, the alternate continuations appear as sibling branches. Branches follow native `/tree` conventions where the active branch is shown first, active-path turns get a `•` marker, and the initial selection lands on the latest diff-producing turn on the active session head.
 
-Files, hunks, and diff body lines should **not** create tree children. They are details attached to the selected diff-producing user turn.
+Files, hunks, and diff body lines are review-only children attached inline under the selected diff-producing user turn. They do not represent pi session branches and never affect `/tree` navigation semantics.
 
 ### Turn node
 
@@ -63,9 +63,9 @@ Example:
 ⊟ user: Refactor calculator parsing...  +24 -8  3 files  4 hunks
 ```
 
-### Detail pane
+### Inline review children
 
-The selected turn's detail pane shows changed files and concrete hunks. Hunk rows and diff body lines can be selected/scrolled for review and for `ctrl+g` editor jumping.
+The selected turn expands inline to show changed files and concrete hunks. Hunk rows and diff body lines can be selected/scrolled in the same tree for review and for `ctrl+g` editor jumping.
 
 Example:
 
@@ -79,7 +79,7 @@ src/render/diff-view.ts  (+24 -8)  3 hunks
 
 ### Folding
 
-Users should be able to collapse or expand branch nodes in the diff-producing turn tree. File and hunk data lives in the selected-turn detail pane rather than in the tree itself.
+Users should be able to collapse or expand both branch nodes and inline review nodes. Files are shown inline under the selected turn; hunks start collapsed for scanability and can be expanded with `l`.
 
 ### Headers and line indicators
 
@@ -105,19 +105,19 @@ The navigator should support vim-like motions by default.
 
 ### Core motions
 
-- `j` / `k` — move selection down / up in the focused pane
-- `tab` — switch focus between the turn tree and selected-turn diff details
-- `h` — collapse current item or move to parent within the focused tree/details pane
-- `l` — expand current item or move to child within the focused tree/details pane
+- `j` / `k` — move selection down / up in the unified tree
+- `tab` — jump between the selected turn and its first changed file
+- `h` — collapse current item or move to parent
+- `l` — expand current item or dive into child rows
 - `gg` — jump to top
 - `G` — jump to bottom
-- `enter` — toggle file/hunk details or open the selected diff line in the detail pane
+- `enter` — open the selected changed file / hunk / diff line in the external editor
 - `q` / `esc` — close the diff UI from anywhere
 
 ### Nice-to-have motions
 
 - `[` / `]` — previous / next hunk
-- `[f` / `]f` — previous / next changed file in the selected turn details
+- `[f` / `]f` — previous / next changed file in the selected turn
 - `zc` / `zo` / `za` style fold helpers if they fit naturally
 
 ### Non-vim fallback
@@ -231,7 +231,7 @@ Implemented in the first UI pass:
 
 - `/diff` command
 - branch-aware diff-producing turn tree
-- selected-turn details for files, hunks, and diff body lines
+- unified tree with inline files, hunks, and diff body lines for the selected turn
 - fold/expand navigation for tree branches
 - review-only behavior; branch navigation/rewind stays in pi's native `/tree`
 - `ctrl+g` external-editor jump to the selected hunk line
