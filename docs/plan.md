@@ -24,7 +24,7 @@ The intended UX is documented in [docs/diff-review-spec.md](diff-review-spec.md)
 Highlights from the current direction:
 
 - primary command: `/diff`
-- tree-inspired navigator where diff-producing user turns stay visually flat during linear continuation and indent only at fork/branch points
+- tree-inspired navigator where diff-producing user turns stay visually flat during linear continuation, indent only at fork/branch points, and mark the active branch
 - selected-turn detail pane for files, hunks, and diff body scrolling
 - vim-style keyboard navigation
 - `ctrl+g` opens the selected diff region in `nvim` / `$VISUAL` / `$EDITOR`

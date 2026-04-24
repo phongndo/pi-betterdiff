@@ -256,7 +256,7 @@ describe("buildReviewModel", () => {
       },
     ];
 
-    const model = buildReviewModelFromTree(tree);
+    const model = buildReviewModelFromTree(tree, "t2b");
 
     expect(model.turns.map((turn) => turn.prompt)).toEqual([
       "create base",
@@ -269,6 +269,11 @@ describe("buildReviewModel", () => {
       "branch alpha",
       "branch beta",
     ]);
+    expect(
+      model.activeTurnIds.map(
+        (turnId) => model.turns.find((turn) => turn.id === turnId)?.prompt,
+      ),
+    ).toEqual(["create base", "branch beta"]);
     expect(model.roots[0]?.children[0]?.children).toEqual([]);
   });
 

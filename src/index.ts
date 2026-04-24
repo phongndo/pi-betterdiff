@@ -26,7 +26,10 @@ export default function betterDiffExtension(pi: ExtensionAPI): void {
 
     await ctx.waitForIdle();
 
-    const model = buildReviewModelFromTree(ctx.sessionManager.getTree());
+    const model = buildReviewModelFromTree(
+      ctx.sessionManager.getTree(),
+      ctx.sessionManager.getLeafId(),
+    );
     const result = await ctx.ui.custom<DiffReviewAction>(
       (tui, theme, keybindings, done) => {
         return new DiffReviewComponent(

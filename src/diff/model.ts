@@ -48,6 +48,8 @@ export interface ReviewModel extends DiffStats {
   turns: ReviewTurn[];
   /** Diff-producing user turns arranged by compressed pi session-tree ancestry. */
   roots: ReviewTurn[];
+  /** Diff-producing turn ids that are on the current active pi branch. */
+  activeTurnIds: string[];
   totalFiles: number;
   totalHunks: number;
 }
@@ -84,18 +86,21 @@ const MAX_WRITE_PREVIEW_LINES = 80;
 
 export function buildReviewModel(
   entries: readonly SessionEntry[],
+  activeLeafId?: string | null,
 ): ReviewModel {
-  return buildReviewModelFromEntries(entries);
+  return buildReviewModelFromEntries(entries, activeLeafId);
 }
 
 export function buildReviewModelFromTree(
   tree: readonly ReviewSessionTreeNode[],
+  activeLeafId?: string | null,
 ): ReviewModel {
-  return buildReviewModelFromEntries(flattenSessionTree(tree));
+  return buildReviewModelFromEntries(flattenSessionTree(tree), activeLeafId);
 }
 
 function buildReviewModelFromEntries(
   entries: readonly SessionEntry[],
+  activeLeafId: string | null | undefined,
 ): ReviewModel {
   const byId = new Map<string, SessionEntry>();
   const toolCalls = new Map<string, ToolCallInfo>();
@@ -153,6 +158,7 @@ function buildReviewModelFromEntries(
     (turn) => turn.files.length > 0,
   );
   const roots = connectDiffTurnTree(visibleTurns, byId);
+  const activeTurnIds = findActiveTurnIds(activeLeafId, byId, visibleTurns);
   const { turns, roots: immutableRoots } = stripMutableTurns(
     visibleTurns,
     roots,
@@ -161,6 +167,7 @@ function buildReviewModelFromEntries(
   return {
     turns,
     roots: immutableRoots,
+    activeTurnIds,
     totalFiles: countUniqueFiles(visibleTurns),
     totalHunks: countHunks(visibleTurns),
     additions: visibleTurns.reduce((total, turn) => total + turn.additions, 0),
@@ -259,6 +266,32 @@ function findNearestDiffAncestor(
     currentId = current.parentId;
   }
   return undefined;
+}
+
+function findActiveTurnIds(
+  activeLeafId: string | null | undefined,
+  byId: ReadonlyMap<string, SessionEntry>,
+  visibleTurns: readonly MutableReviewTurn[],
+): string[] {
+  if (!activeLeafId) return [];
+
+  const visibleByUserEntryId = new Map(
+    visibleTurns.map((turn) => [turn.userEntryId, turn] as const),
+  );
+  const activeTurnIds: string[] = [];
+  let currentId: string | null = activeLeafId;
+
+  while (currentId) {
+    const current = byId.get(currentId);
+    if (!current) break;
+    if (current.type === "message" && current.message.role === "user") {
+      const turn = visibleByUserEntryId.get(current.id);
+      if (turn) activeTurnIds.push(turn.id);
+    }
+    currentId = current.parentId;
+  }
+
+  return activeTurnIds.reverse();
 }
 
 function stripMutableTurns(

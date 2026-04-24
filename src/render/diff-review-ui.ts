@@ -28,11 +28,19 @@ export type DiffReviewAction =
 
 type FocusMode = "tree" | "details";
 
+interface Gutter {
+  position: number;
+  show: boolean;
+}
+
 interface TurnRow {
   id: string;
   turn: ReviewTurn;
-  depth: number;
-  prefix: string;
+  indent: number;
+  showConnector: boolean;
+  isLast: boolean;
+  gutters: Gutter[];
+  isVirtualRootChild: boolean;
 }
 
 interface FileDetailRow {
@@ -66,8 +74,12 @@ export class DiffReviewComponent implements Component {
   private readonly turnsById = new Map<string, ReviewTurn>();
   private readonly parentById = new Map<string, string | undefined>();
   private readonly childrenById = new Map<string, string[]>();
-  private readonly foldableIds = new Set<string>();
+  private readonly activeTurnIds = new Set<string>();
+  private readonly activeDescendantMemo = new Map<string, boolean>();
   private readonly foldedIds = new Set<string>();
+  private visibleParentById = new Map<string, string | undefined>();
+  private visibleChildrenById = new Map<string | undefined, string[]>();
+  private multipleVisibleRoots = false;
   private cachedTreeRows: TurnRow[] | undefined;
   private selectedTurnId: string | undefined;
   private selectedDetailId: string | undefined;
@@ -112,7 +124,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. tab: ${this.focus === "tree" ? "diff details" : "tree"}. ←/→ or h/l: fold/branch. enter: toggle. c/e: collapse/expand. u: undo turn. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→: page. tab: ${this.focus === "tree" ? "diff details" : "tree"}. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. enter: toggle. u: undo turn. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -363,11 +375,9 @@ export class DiffReviewComponent implements Component {
       this.tui.requestRender();
       return;
     } else if (matchesKey(data, "left")) {
-      this.focus = "tree";
-      this.collapseOrMoveParent();
+      this.pageFocusedSelection(-1);
     } else if (matchesKey(data, "right")) {
-      this.focus = "tree";
-      this.expandOrMoveChild();
+      this.pageFocusedSelection(1);
     } else if (isPrintableInput(data)) {
       this.searchQuery += data;
       this.foldedIds.clear();
@@ -383,6 +393,9 @@ export class DiffReviewComponent implements Component {
   }
 
   private indexModel(): void {
+    for (const turnId of this.model.activeTurnIds) {
+      this.activeTurnIds.add(turnId);
+    }
     for (const root of this.model.roots) {
       this.addTurnAndChildren(root, undefined);
     }
@@ -390,9 +403,6 @@ export class DiffReviewComponent implements Component {
       if (!this.turnsById.has(turn.id)) {
         this.addTurnAndChildren(turn, undefined);
       }
-    }
-    for (const [id, children] of this.childrenById) {
-      if (children.length > 1) this.foldableIds.add(id);
     }
   }
 
@@ -413,7 +423,11 @@ export class DiffReviewComponent implements Component {
   }
 
   private firstSelectableTurnId(): string | undefined {
-    return this.model.roots[0]?.id ?? this.model.turns[0]?.id;
+    return (
+      this.model.activeTurnIds[this.model.activeTurnIds.length - 1] ??
+      this.model.roots[0]?.id ??
+      this.model.turns[0]?.id
+    );
   }
 
   private getTreeRows(): TurnRow[] {
@@ -428,10 +442,30 @@ export class DiffReviewComponent implements Component {
   private buildTreeRows(): TurnRow[] {
     const rows: TurnRow[] = [];
     const visibleTurnIds = this.getSearchVisibleTurnIds();
-    for (let index = 0; index < this.model.roots.length; index++) {
-      const root = this.model.roots[index];
-      if (!root) continue;
-      this.addTurnRows(rows, root.id, 0, "", "", visibleTurnIds);
+    const rootIds = this.model.roots
+      .map((root) => root.id)
+      .filter((rootId) => !visibleTurnIds || visibleTurnIds.has(rootId));
+    const orderedRootIds = this.sortActiveFirst(rootIds);
+    this.visibleParentById = new Map<string, string | undefined>();
+    this.visibleChildrenById = new Map<string | undefined, string[]>();
+    this.visibleChildrenById.set(undefined, orderedRootIds);
+    this.multipleVisibleRoots = orderedRootIds.length > 1;
+
+    for (let index = 0; index < orderedRootIds.length; index++) {
+      const rootId = orderedRootIds[index];
+      if (!rootId) continue;
+      this.addTurnRows(
+        rows,
+        rootId,
+        this.multipleVisibleRoots ? 1 : 0,
+        this.multipleVisibleRoots,
+        this.multipleVisibleRoots,
+        index === orderedRootIds.length - 1,
+        [],
+        this.multipleVisibleRoots,
+        visibleTurnIds,
+        undefined,
+      );
     }
     return rows;
   }
@@ -439,55 +473,91 @@ export class DiffReviewComponent implements Component {
   private addTurnRows(
     rows: TurnRow[],
     turnId: string,
-    depth: number,
-    rowPrefix: string,
-    linearPrefix: string,
+    indent: number,
+    justBranched: boolean,
+    showConnector: boolean,
+    isLast: boolean,
+    gutters: readonly Gutter[],
+    isVirtualRootChild: boolean,
     visibleTurnIds: ReadonlySet<string> | undefined,
+    visibleParentId: string | undefined,
   ): void {
     if (visibleTurnIds && !visibleTurnIds.has(turnId)) return;
 
     const turn = this.turnsById.get(turnId);
     if (!turn) return;
 
+    this.visibleParentById.set(turnId, visibleParentId);
     rows.push({
       id: turn.id,
       turn,
-      depth,
-      prefix: rowPrefix,
+      indent,
+      showConnector,
+      isLast,
+      gutters: [...gutters],
+      isVirtualRootChild,
     });
 
+    const childIds = this.sortActiveFirst(
+      (this.childrenById.get(turn.id) ?? []).filter(
+        (childId) => !visibleTurnIds || visibleTurnIds.has(childId),
+      ),
+    );
+    this.visibleChildrenById.set(turnId, childIds);
     if (this.foldedIds.has(turn.id)) return;
 
-    const childIds = (this.childrenById.get(turn.id) ?? []).filter(
-      (childId) => !visibleTurnIds || visibleTurnIds.has(childId),
-    );
-    if (childIds.length === 1) {
-      const onlyChildId = childIds[0];
-      if (!onlyChildId) return;
-      this.addTurnRows(
-        rows,
-        onlyChildId,
-        depth,
-        linearPrefix,
-        linearPrefix,
-        visibleTurnIds,
-      );
-      return;
-    }
+    const multipleChildren = childIds.length > 1;
+    const childIndent = multipleChildren
+      ? indent + 1
+      : justBranched && indent > 0
+        ? indent + 1
+        : indent;
+    const connectorDisplayed = showConnector && !isVirtualRootChild;
+    const currentDisplayIndent = this.multipleVisibleRoots
+      ? Math.max(0, indent - 1)
+      : indent;
+    const connectorPosition = Math.max(0, currentDisplayIndent - 1);
+    const childGutters = connectorDisplayed
+      ? [...gutters, { position: connectorPosition, show: !isLast }]
+      : gutters;
 
     for (let index = 0; index < childIds.length; index++) {
       const childId = childIds[index];
       if (!childId) continue;
-      const isLast = index === childIds.length - 1;
       this.addTurnRows(
         rows,
         childId,
-        depth + 1,
-        `${linearPrefix}${isLast ? "└─ " : "├─ "}`,
-        `${linearPrefix}${isLast ? "   " : "│  "}`,
+        childIndent,
+        multipleChildren,
+        multipleChildren,
+        index === childIds.length - 1,
+        childGutters,
+        false,
         visibleTurnIds,
+        turn.id,
       );
     }
+  }
+
+  private sortActiveFirst(ids: readonly string[]): string[] {
+    return [...ids].sort((left, right) => {
+      const leftActive = this.subtreeContainsActiveTurn(left);
+      const rightActive = this.subtreeContainsActiveTurn(right);
+      return Number(rightActive) - Number(leftActive);
+    });
+  }
+
+  private subtreeContainsActiveTurn(turnId: string): boolean {
+    const cached = this.activeDescendantMemo.get(turnId);
+    if (cached !== undefined) return cached;
+
+    const contains =
+      this.activeTurnIds.has(turnId) ||
+      (this.childrenById.get(turnId) ?? []).some((childId) =>
+        this.subtreeContainsActiveTurn(childId),
+      );
+    this.activeDescendantMemo.set(turnId, contains);
+    return contains;
   }
 
   private getDetailRows(): DetailRow[] {
@@ -573,13 +643,59 @@ export class DiffReviewComponent implements Component {
     const selected = row.id === this.selectedTurnId;
     const focused = selected && this.focus === "tree";
     const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
-    const prefix = this.theme.fg("dim", row.prefix);
-    const marker = this.foldMarker(row.id);
+    const prefix = this.theme.fg("dim", this.prefixForTurnRow(row));
+    const foldMarker = this.rootFoldMarker(row);
+    const pathMarker = this.activeTurnIds.has(row.id)
+      ? this.theme.fg("accent", "• ")
+      : "";
     const prompt = row.turn.prompt || "(empty prompt)";
-    const text = `${marker}${this.theme.fg("accent", "user: ")}${this.theme.fg("text", prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
+    const text = `${foldMarker}${pathMarker}${this.theme.fg("accent", "user: ")}${this.theme.fg("text", prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
     let line = cursor + prefix + (selected ? this.theme.bold(text) : text);
     if (focused) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width);
+  }
+
+  private prefixForTurnRow(row: TurnRow): string {
+    const displayIndent = this.multipleVisibleRoots
+      ? Math.max(0, row.indent - 1)
+      : row.indent;
+    const connector = row.showConnector && !row.isVirtualRootChild;
+    const connectorPosition = connector ? displayIndent - 1 : -1;
+    const totalChars = displayIndent * 3;
+    const prefixChars: string[] = [];
+    const isFolded = this.foldedIds.has(row.id);
+
+    for (let index = 0; index < totalChars; index++) {
+      const level = Math.floor(index / 3);
+      const posInLevel = index % 3;
+      const gutter = row.gutters.find(
+        (candidate) => candidate.position === level,
+      );
+
+      if (gutter) {
+        prefixChars.push(posInLevel === 0 && gutter.show ? "│" : " ");
+      } else if (connector && level === connectorPosition) {
+        if (posInLevel === 0) {
+          prefixChars.push(row.isLast ? "└" : "├");
+        } else if (posInLevel === 1) {
+          prefixChars.push(
+            isFolded ? "⊞" : this.isFoldable(row.id) ? "⊟" : "─",
+          );
+        } else {
+          prefixChars.push(" ");
+        }
+      } else {
+        prefixChars.push(" ");
+      }
+    }
+
+    return prefixChars.join("");
+  }
+
+  private rootFoldMarker(row: TurnRow): string {
+    const showsFoldInConnector = row.showConnector && !row.isVirtualRootChild;
+    if (!this.foldedIds.has(row.id) || showsFoldInConnector) return "";
+    return this.theme.fg("accent", "⊞ ");
   }
 
   private renderDetailRow(row: DetailRow, width: number): string {
@@ -630,13 +746,6 @@ export class DiffReviewComponent implements Component {
       highlightCode(content, language)[0] ??
       this.theme.fg("toolOutput", content)
     );
-  }
-
-  private foldMarker(id: string): string {
-    if (!this.foldableIds.has(id)) return "  ";
-    return this.foldedIds.has(id)
-      ? this.theme.fg("accent", "⊞ ")
-      : this.theme.fg("accent", "⊟ ");
   }
 
   private moveFocusedSelection(delta: number): void {
@@ -716,9 +825,26 @@ export class DiffReviewComponent implements Component {
     }
   }
 
+  private isFoldable(turnId: string): boolean {
+    const children = this.visibleChildrenById.get(turnId);
+    if (!children || children.length === 0) return false;
+
+    const parentId = this.visibleParentById.get(turnId);
+    if (parentId === undefined) return true;
+
+    const siblings = this.visibleChildrenById.get(parentId);
+    return siblings !== undefined && siblings.length > 1;
+  }
+
+  private firstVisibleChildId(turnId: string): string | undefined {
+    return this.visibleChildrenById.get(turnId)?.[0];
+  }
+
   private toggleSelectedTurn(): void {
     const turn = this.getSelectedTurn();
-    if (!turn || !this.foldableIds.has(turn.id)) return;
+    if (!turn || (!this.isFoldable(turn.id) && !this.foldedIds.has(turn.id))) {
+      return;
+    }
     if (this.foldedIds.has(turn.id)) {
       this.foldedIds.delete(turn.id);
     } else {
@@ -731,7 +857,7 @@ export class DiffReviewComponent implements Component {
     const turn = this.getSelectedTurn();
     if (!turn) return;
 
-    if (this.foldableIds.has(turn.id) && !this.foldedIds.has(turn.id)) {
+    if (this.isFoldable(turn.id) && !this.foldedIds.has(turn.id)) {
       this.foldedIds.add(turn.id);
       this.invalidateTreeRows();
       return;
@@ -743,19 +869,20 @@ export class DiffReviewComponent implements Component {
   private expandOrMoveChild(): void {
     const turn = this.getSelectedTurn();
     if (!turn) return;
-    if (this.foldableIds.has(turn.id) && this.foldedIds.has(turn.id)) {
+    if (this.foldedIds.has(turn.id)) {
       this.foldedIds.delete(turn.id);
       this.invalidateTreeRows();
       return;
     }
-    const childId = this.childrenById.get(turn.id)?.[0];
+    const childId = this.firstVisibleChildId(turn.id);
     if (childId) this.selectTurn(childId);
   }
 
   private collapseAllBranches(): void {
     this.foldedIds.clear();
-    for (const id of this.foldableIds) {
-      this.foldedIds.add(id);
+    this.invalidateTreeRows();
+    for (const row of this.getTreeRows()) {
+      if (this.isFoldable(row.id)) this.foldedIds.add(row.id);
     }
     this.invalidateTreeRows();
   }
