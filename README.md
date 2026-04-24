@@ -1,8 +1,8 @@
 # pi-betterdiff
 
-Scaffold for a clean, robust [pi](https://pi.dev) extension package focused on better diff ergonomics.
+A [pi](https://pi.dev) extension package focused on better session-diff ergonomics.
 
-This repo is intentionally **repo-first / scaffold-only** right now. It sets up the package, tooling, checks, and CI/CD, but it does **not** implement any real extension behavior yet.
+The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations in the current session branch.
 
 ## What is included
 
@@ -11,8 +11,10 @@ This repo is intentionally **repo-first / scaffold-only** right now. It sets up 
 - ESLint + Prettier setup
 - **Vitest** test suite with coverage support
 - GitHub Actions for CI and release packaging
-- a no-op pi extension entrypoint so the package shape is valid without shipping behavior
-- placeholder source and fixture directories for future implementation work
+- `/diff` command that opens a tree-inspired session diff navigator
+- turn/file/hunk hierarchy with fold/expand controls
+- turn-level rewind via pi tree navigation
+- `ctrl+g` external-editor handoff for the selected diff hunk
 
 ## Repo layout
 
@@ -23,9 +25,9 @@ This repo is intentionally **repo-first / scaffold-only** right now. It sets up 
 ├── src/
 │   ├── config/          # placeholder for future config modules
 │   ├── diff/            # placeholder for future diff logic
-│   ├── render/          # placeholder for future renderer integration
+│   ├── render/          # custom TUI diff-review component
 │   ├── runtime/         # placeholder for future runtime orchestration
-│   └── index.ts         # placeholder pi extension entrypoint
+│   └── index.ts         # pi extension entrypoint and /diff command
 └── test/
     └── fixtures/        # placeholder golden/regression fixtures
 ```
@@ -43,7 +45,7 @@ npm run check
 pi -e .
 ```
 
-That currently loads a placeholder extension with no runtime behavior.
+Then use `/diff` inside pi to open the diff review UI.
 
 ## Scripts
 
@@ -70,7 +72,7 @@ It installs dependencies, runs the full quality pipeline, and verifies that `npm
 `.github/workflows/release.yml` runs on `v*` tags and on manual dispatch.
 It re-validates the package, creates a tarball with `npm pack`, uploads it as a workflow artifact, and attaches it to a GitHub release when triggered by a tag.
 
-> The package is currently marked `private: true` to prevent accidental npm publication while the repository is still scaffold-only.
+> The package is currently marked `private: true` to prevent accidental npm publication while the extension is still an early prototype.
 
 ## Planning docs
 
@@ -79,4 +81,4 @@ It re-validates the package, creates a tarball with `npm pack`, uploads it as a 
 
 ## Next steps
 
-The current plan is to grow this into a tree-inspired diff review UI for pi session mutations, opened via `/diff` and a default `ctrl+space` shortcut, with `ctrl+g` opening the selected hunk in an external editor and then returning to the diff UI.
+Next work should deepen the prototype: richer write/overwrite diffs, full session-tree branch coverage, better tests for renderer output, and more editor adapters.

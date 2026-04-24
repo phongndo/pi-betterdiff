@@ -1,7 +1,7 @@
 # Diff review UX spec
 
 This document captures the intended product shape for `pi-betterdiff`.
-It is a planning/spec artifact only. No runtime behavior is implemented yet.
+An initial `/diff` UI prototype now exists; this spec still describes the broader desired behavior and marks several areas that need hardening.
 
 ## Primary goal
 
@@ -19,11 +19,7 @@ This is the primary entrypoint for opening the diff review UI.
 
 ### Keyboard shortcut
 
-- default shortcut: `ctrl+space`
-
-This should open the same diff review UI as `/diff`.
-
-> Note: `ctrl+space` is the desired default, but some terminals do not emit it reliably. `/diff` remains the guaranteed fallback entrypoint.
+No default shortcut is currently registered. Keyboard shortcuts can be revisited later; `/diff` remains the guaranteed entrypoint.
 
 ## Core interaction model
 
@@ -235,7 +231,19 @@ The default mental model is:
 4. Smooth return back into the review UI after editing
 5. A layout that feels native to pi's tree-oriented workflows
 
-## Explicit non-goal for scaffold stage
+## Prototype status
 
-This document does **not** imply that any of the above is implemented yet.
-It only captures the intended design so the repo scaffolding can grow toward it deliberately.
+Implemented in the first UI pass:
+
+- `/diff` command
+- current-branch turn/file/hunk hierarchy
+- fold/expand navigation
+- turn rewind via `ctx.navigateTree()`
+- `ctrl+g` external-editor jump to the selected hunk line
+
+Still to harden:
+
+- complete branch-aware history, not only the active branch
+- richer before/after reconstruction for `write` overwrites
+- more exact hunk metadata and editor targeting
+- renderer golden tests and broader integration coverage

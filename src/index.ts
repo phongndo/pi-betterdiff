@@ -1,15 +1,65 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+} from "@mariozechner/pi-coding-agent";
 
-export const BETTERDIFF_EXTENSION_STAGE = "scaffold" as const;
+import { buildReviewModel } from "./diff/model.js";
+import {
+  DiffReviewComponent,
+  type DiffReviewAction,
+} from "./render/diff-review-ui.js";
+
+export const BETTERDIFF_EXTENSION_STAGE = "ui-prototype" as const;
 
 export const BETTERDIFF_NEXT_STEPS = [
-  "Decide the better-diff UX and extension surface.",
-  "Add pure diff-formatting helpers with golden tests.",
-  "Add renderer and tool-integration tests before implementing runtime behavior.",
+  "Collect richer mutation history for write/overwrite operations.",
+  "Add true session-tree branch coverage instead of current-branch-only review.",
+  "Add golden tests for renderer output and editor adapter targeting.",
 ] as const;
 
 export default function betterDiffExtension(pi: ExtensionAPI): void {
-  void pi;
-  // Intentionally empty.
-  // This repository is scaffolded, but the actual extension behavior is not implemented yet.
+  async function openDiffReview(ctx: ExtensionCommandContext): Promise<void> {
+    if (!ctx.hasUI) {
+      ctx.ui.notify("/diff requires interactive UI mode.", "warning");
+      return;
+    }
+
+    await ctx.waitForIdle();
+
+    const model = buildReviewModel(ctx.sessionManager.getBranch());
+    const result = await ctx.ui.custom<DiffReviewAction>(
+      (tui, theme, keybindings, done) => {
+        return new DiffReviewComponent(
+          model,
+          ctx.cwd,
+          tui,
+          theme,
+          keybindings,
+          done,
+        );
+      },
+    );
+
+    if (result.type === "undo") {
+      const confirmed = await ctx.ui.confirm(
+        "Undo to turn?",
+        `Navigate back to before ${result.label}? The original prompt will be restored to the editor so you can edit or resubmit it.`,
+      );
+      if (!confirmed) return;
+
+      const navigation = await ctx.navigateTree(result.targetEntryId, {
+        summarize: false,
+      });
+      if (!navigation.cancelled) {
+        ctx.ui.notify(`Rewound to ${result.label}.`, "info");
+      }
+    }
+  }
+
+  pi.registerCommand("diff", {
+    description: "Review session file diffs by turn",
+    handler: async (_args, ctx) => {
+      await openDiffReview(ctx);
+    },
+  });
 }

@@ -2,7 +2,7 @@
   "name": "pi-betterdiff",
   "version": "0.1.0",
   "private": true,
-  "description": "Scaffold for a robust pi extension package focused on better diff ergonomics.",
+  "description": "Tree-inspired pi extension for reviewing session file diffs by turn.",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -15,7 +15,7 @@
   ],
   "files": [
     "src",
-    "docs/plan.md",
+    "docs",
     "README.md"
   ],
   "scripts": {
