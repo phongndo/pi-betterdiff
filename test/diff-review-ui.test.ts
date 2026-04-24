@@ -166,7 +166,7 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("  • user: change file +1 -0 1 file 1 hunk");
   });
 
-  it("keeps turn navigation on turns while details stay visible until l enters them", () => {
+  it("keeps turn navigation on turns without opening details until l enters them", () => {
     const component = createComponent(buildTwoTurnModel());
 
     let rendered = renderComponent(component);
@@ -180,18 +180,17 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain(
       "<selectedBg>› user: second change +2 -1 1 file 1 hunk</selectedBg>",
     );
-    expect(rendered).toContain("src/second.ts +2 -1 1 hunk");
-    expect(rendered).not.toContain("<selectedBg>› └─ ⊟ src/first.ts");
+    expect(rendered).not.toContain("src/first.ts +1 -0 1 hunk");
+    expect(rendered).not.toContain("src/second.ts +2 -1 1 hunk");
 
-    const detailComponent = createComponent(buildTwoTurnModel());
-    detailComponent.handleInput("l");
-    rendered = renderComponent(detailComponent);
+    component.handleInput("l");
+    rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› └─ ⊟ src/first.ts +1 -0 1 hunk</selectedBg>",
+      "<selectedBg>› └─ ⊟ src/second.ts +2 -1 1 hunk</selectedBg>",
     );
   });
 
-  it("uses scoped item offsets for turn page movement", () => {
+  it("uses scoped item offsets for turn page movement without opening details", () => {
     const component = createComponent(buildTwoTurnModel());
 
     component.handleInput("\u001b[C");
@@ -199,12 +198,132 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain(
       "<selectedBg>› user: second change +2 -1 1 file 1 hunk</selectedBg>",
     );
+    expect(rendered).not.toContain("src/second.ts +2 -1 1 hunk");
 
     component.handleInput("\u001b[D");
     rendered = renderComponent(component);
     expect(rendered).toContain(
       "<selectedBg>› • user: first change +1 -0 1 file 1 hunk</selectedBg>",
     );
+    expect(rendered).not.toContain("src/first.ts +1 -0 1 hunk");
+  });
+
+  it("collapses selected turn details with h and re-enters them with l", () => {
+    const component = createComponent(
+      buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 7,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("src/a.ts +1 -0 1 hunk");
+
+    component.handleInput("h");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change file +1 -0 1 file 1 hunk</selectedBg>",
+    );
+    expect(rendered).not.toContain("src/a.ts +1 -0 1 hunk");
+
+    component.handleInput("l");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› └─ ⊟ src/a.ts +1 -0 1 hunk</selectedBg>",
+    );
+  });
+
+  it("scopes c/e to selected turn details", () => {
+    const component = createComponent(
+      buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 7,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("src/a.ts +1 -0 1 hunk");
+
+    component.handleInput("c");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change file +1 -0 1 file 1 hunk</selectedBg>",
+    );
+    expect(rendered).not.toContain("src/a.ts +1 -0 1 hunk");
+
+    component.handleInput("e");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("src/a.ts +1 -0 1 hunk");
+  });
+
+  it("scopes c/e to file rows when selected on a file", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("l");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+    expect(rendered).toContain("lines 30-31  write  +3 -2 src/b.ts");
+
+    component.handleInput("c");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› ├─ ⊞ src/a.ts +3 -1 2 hunks</selectedBg>",
+    );
+    expect(rendered).not.toContain("lines 7-9  edit  +2 -1 src/a.ts");
+    expect(rendered).not.toContain("lines 30-31  write  +3 -2 src/b.ts");
+
+    component.handleInput("e");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› ├─ ⊟ src/a.ts +3 -1 2 hunks</selectedBg>",
+    );
+    expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+    expect(rendered).toContain("lines 30-31  write  +3 -2 src/b.ts");
+  });
+
+  it("scopes c/e to hunk rows when selected on a hunk", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("l");
+    component.handleInput("l");
+    let rendered = renderComponent(component);
+    expect(rendered).not.toContain("+7 changed");
+    expect(rendered).not.toContain("+20 changed");
+
+    component.handleInput("e");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("+7 changed");
+    expect(rendered).toContain("+20 changed");
+    expect(rendered).not.toContain("+30 changed");
+
+    component.handleInput("c");
+    rendered = renderComponent(component);
+    expect(rendered).not.toContain("+7 changed");
+    expect(rendered).not.toContain("+20 changed");
   });
 
   it("keeps file navigation on files while hunks stay visible until l enters them", () => {

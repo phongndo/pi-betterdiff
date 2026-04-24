@@ -869,6 +869,12 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
+    if (this.detailTurnId === row.id) {
+      this.detailTurnId = undefined;
+      this.invalidateRows();
+      return;
+    }
+
     if (this.isBranchFoldable(row.id) && !this.foldedBranchIds.has(row.id)) {
       this.foldedBranchIds.add(row.id);
       this.invalidateRows();
@@ -928,9 +934,15 @@ export class DiffReviewComponent implements Component {
     const row = this.getSelectedRow();
     if (!row) return;
     if (row.kind === "turn") {
-      this.collapseAllBranches();
+      this.collapseTurnScope(row);
+    } else if (row.kind === "file") {
+      this.collapseFileLevel(row.turn);
+    } else if (row.kind === "hunk") {
+      this.collapseHunkLevel(row.file);
     } else {
-      this.collapseAllDetails(row.turn);
+      this.foldedDetailIds.add(row.hunk.id);
+      this.selectRow(row.hunk.id);
+      this.invalidateRows();
     }
   }
 
@@ -938,29 +950,41 @@ export class DiffReviewComponent implements Component {
     const row = this.getSelectedRow();
     if (!row) return;
     if (row.kind === "turn") {
-      this.expandAllBranches();
+      this.expandTurnScope(row);
+    } else if (row.kind === "file") {
+      this.expandFileLevel(row.turn);
+    } else if (row.kind === "hunk") {
+      this.expandHunkLevel(row.file);
     } else {
-      this.expandAllDetails(row.turn);
+      this.foldedDetailIds.delete(row.hunk.id);
+      this.invalidateRows();
     }
   }
 
-  private collapseAllBranches(): void {
-    this.foldedBranchIds.clear();
-    this.invalidateRows();
-    for (const row of this.getRows()) {
-      if (row.kind === "turn" && this.isBranchFoldable(row.id)) {
-        this.foldedBranchIds.add(row.id);
-      }
+  private collapseTurnScope(row: TurnRow): void {
+    let changed = false;
+    if (this.detailTurnId === row.id) {
+      this.detailTurnId = undefined;
+      changed = true;
     }
-    this.invalidateRows();
+    if (this.isBranchFoldable(row.id) && !this.foldedBranchIds.has(row.id)) {
+      this.foldedBranchIds.add(row.id);
+      changed = true;
+    }
+    if (changed) this.invalidateRows();
   }
 
-  private expandAllBranches(): void {
-    this.foldedBranchIds.clear();
-    this.invalidateRows();
+  private expandTurnScope(row: TurnRow): void {
+    let changed = false;
+    if (this.foldedBranchIds.delete(row.id)) changed = true;
+    if (row.turn.files.length > 0 && this.detailTurnId !== row.id) {
+      this.detailTurnId = row.id;
+      changed = true;
+    }
+    if (changed) this.invalidateRows();
   }
 
-  private collapseAllDetails(turn: ReviewTurn): void {
+  private collapseFileLevel(turn: ReviewTurn): void {
     for (const file of turn.files) {
       this.foldedDetailIds.add(file.id);
       for (const hunk of file.hunks) {
@@ -970,12 +994,25 @@ export class DiffReviewComponent implements Component {
     this.invalidateRows();
   }
 
-  private expandAllDetails(turn: ReviewTurn): void {
+  private expandFileLevel(turn: ReviewTurn): void {
+    this.detailTurnId = turn.id;
     for (const file of turn.files) {
       this.foldedDetailIds.delete(file.id);
-      for (const hunk of file.hunks) {
-        this.foldedDetailIds.delete(hunk.id);
-      }
+    }
+    this.invalidateRows();
+  }
+
+  private collapseHunkLevel(file: ReviewFile): void {
+    for (const hunk of file.hunks) {
+      this.foldedDetailIds.add(hunk.id);
+    }
+    this.invalidateRows();
+  }
+
+  private expandHunkLevel(file: ReviewFile): void {
+    this.foldedDetailIds.delete(file.id);
+    for (const hunk of file.hunks) {
+      this.foldedDetailIds.delete(hunk.id);
     }
     this.invalidateRows();
   }
@@ -1007,12 +1044,20 @@ export class DiffReviewComponent implements Component {
     if (!id) return;
     const row = this.getRows().find((candidate) => candidate.id === id);
     this.selectedId = id;
-    if (row) {
-      const nextDetailTurnId = row.turn.id;
-      if (this.detailTurnId !== nextDetailTurnId) {
-        this.detailTurnId = nextDetailTurnId;
+    if (!row) return;
+
+    if (row.kind === "turn") {
+      if (this.detailTurnId && this.detailTurnId !== row.id) {
+        this.detailTurnId = undefined;
         this.invalidateRows();
       }
+      return;
+    }
+
+    const nextDetailTurnId = row.turn.id;
+    if (this.detailTurnId !== nextDetailTurnId) {
+      this.detailTurnId = nextDetailTurnId;
+      this.invalidateRows();
     }
   }
 

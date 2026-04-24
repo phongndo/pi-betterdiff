@@ -22,6 +22,33 @@ Track follow-up items from the review of `9164cdc` (`style: improve diff metadat
   - **Required test:** Existing renderer tests must still pass and verify hunk labels render correctly from `jumpLine`, `newLines`, `toolName`, `additions`, and `removals`.
   - **Fixed in working tree:** `ReviewHunk.header` and `formatHunkHeader()` were removed; renderer tests now build hunks without any header string.
 
+- [x] **Scope `c`/`e` collapse-expand actions to the selected tree level.**
+  - **Location:** `src/render/diff-review-ui.ts:933-1010`, `test/diff-review-ui.test.ts`
+  - **Context:** `c`/`e` previously used broad helpers: turn rows collapsed/expanded all branches globally, and any detail row collapsed/expanded all details for the entire turn. That no longer matches the level-scoped navigation model.
+  - **Why this is an issue:** A user on a file row expects file-level folding, not a whole-turn detail blast. A user on a hunk row expects hunk body folding, not unrelated files. This creates spooky action at a distance.
+  - **How to verify:** On a turn, `c/e` hide/show that turn's details. On a file row, `c/e` collapse/expand file rows for that turn without opening hunk bodies. On a hunk row, `c/e` collapse/expand hunk bodies for that file only.
+  - **Smallest acceptable fix:** Dispatch `c`/`e` by selected row kind: turn scope, file level, hunk level, and containing hunk for diff lines.
+  - **Required test:** Input tests for `c`/`e` on turn, file, and hunk rows proving changes stay inside the selected level/scope.
+  - **Fixed in working tree:** `collapseSelectedScope()` and `expandSelectedScope()` now dispatch by row kind; tests cover turn, file, and hunk scoping.
+
+- [x] **Do not auto-open details when moving between prompts.**
+  - **Location:** `src/render/diff-review-ui.ts:1006-1025`, `test/diff-review-ui.test.ts`
+  - **Context:** Turn-level navigation now keeps file details visible until the user enters them, but moving from prompt to prompt still automatically opened the new prompt's file/hunk details because `selectRow()` switched `detailTurnId` whenever the selected row's turn changed.
+  - **Why this is an issue:** Prompt navigation became noisy in larger branch trees. Every `j/k` or page movement expanded another prompt's file list, making the tree harder to scan. This made prompt-level browsing fight the user.
+  - **How to verify:** Select a prompt with details visible, press `j` or page-right to another prompt, and confirm no file rows are shown for the new prompt. Press `l` and confirm the selected prompt's first file row opens.
+  - **Smallest acceptable fix:** When `selectRow()` selects a turn row from a different turn, clear `detailTurnId` instead of switching it to the new turn. Keep explicit detail entry (`l`, tab, hunk/file jumps) responsible for opening details.
+  - **Required test:** Input tests for `j` and page movement between turn rows proving details stay closed until `l` enters them.
+  - **Fixed in working tree:** `selectRow()` now clears stale details when selecting a different turn row and does not open details for prompt navigation; tests cover `j`, page movement, and explicit `l` entry.
+
+- [x] **Let `h` collapse selected turn detail rows.**
+  - **Location:** `src/render/diff-review-ui.ts:843-885`, `test/diff-review-ui.test.ts`
+  - **Context:** BetterDiff now keeps changed files visible under the selected turn while turn-level navigation stays on turns. That makes details easy to inspect, but it also clutters the tree when the user wants to read branch structure.
+  - **Why this is an issue:** Users had no quick way to hide the inline file/hunk rows for the selected prompt without moving into detail rows or changing selection. This made the happy path easy and tree readability someone else's problem.
+  - **How to verify:** Select a turn with visible changed files, press `h`, and confirm the file/hunk rows under that turn disappear while the turn remains selected. Press `l` and confirm the first file row is selected again.
+  - **Smallest acceptable fix:** In turn-level `h` handling, if the selected turn is currently showing detail rows, clear `detailTurnId`, invalidate rows, and return before branch folding/up-navigation.
+  - **Required test:** Input test that renders visible turn details, presses `h`, asserts details are hidden and the turn remains selected, then presses `l` and asserts file details are re-entered.
+  - **Fixed in working tree:** `moveParentOrCollapse()` now collapses selected turn details before branch folding; renderer/input tests cover `h` collapse and `l` re-entry.
+
 - [x] **Fix scoped navigation page movement using flat row offsets.**
   - **Location:** `src/render/diff-review-ui.ts:740-800`, `test/diff-review-ui.test.ts`
   - **Context:** Scoped navigation made `j/k` stay at the current tree level for turns/files/hunks, but the same code used the flat rendered-row `delta` for page movement (`ctrl+u/d`, left/right). A large page delta could skip past all valid same-level siblings before searching, so paging from a file or hunk could silently do nothing.
