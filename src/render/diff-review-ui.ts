@@ -392,7 +392,7 @@ export class DiffReviewComponent implements Component {
       }
     }
     for (const [id, children] of this.childrenById) {
-      if (children.length > 0) this.foldableIds.add(id);
+      if (children.length > 1) this.foldableIds.add(id);
     }
   }
 
@@ -431,14 +431,7 @@ export class DiffReviewComponent implements Component {
     for (let index = 0; index < this.model.roots.length; index++) {
       const root = this.model.roots[index];
       if (!root) continue;
-      this.addTurnRows(
-        rows,
-        root.id,
-        0,
-        "",
-        index === this.model.roots.length - 1,
-        visibleTurnIds,
-      );
+      this.addTurnRows(rows, root.id, 0, "", "", visibleTurnIds);
     }
     return rows;
   }
@@ -447,8 +440,8 @@ export class DiffReviewComponent implements Component {
     rows: TurnRow[],
     turnId: string,
     depth: number,
-    prefix: string,
-    isLast: boolean,
+    rowPrefix: string,
+    linearPrefix: string,
     visibleTurnIds: ReadonlySet<string> | undefined,
   ): void {
     if (visibleTurnIds && !visibleTurnIds.has(turnId)) return;
@@ -456,7 +449,6 @@ export class DiffReviewComponent implements Component {
     const turn = this.turnsById.get(turnId);
     if (!turn) return;
 
-    const rowPrefix = depth === 0 ? "" : `${prefix}${isLast ? "└─ " : "├─ "}`;
     rows.push({
       id: turn.id,
       turn,
@@ -466,19 +458,33 @@ export class DiffReviewComponent implements Component {
 
     if (this.foldedIds.has(turn.id)) return;
 
-    const childPrefix = depth === 0 ? "" : `${prefix}${isLast ? "   " : "│  "}`;
     const childIds = (this.childrenById.get(turn.id) ?? []).filter(
       (childId) => !visibleTurnIds || visibleTurnIds.has(childId),
     );
+    if (childIds.length === 1) {
+      const onlyChildId = childIds[0];
+      if (!onlyChildId) return;
+      this.addTurnRows(
+        rows,
+        onlyChildId,
+        depth,
+        linearPrefix,
+        linearPrefix,
+        visibleTurnIds,
+      );
+      return;
+    }
+
     for (let index = 0; index < childIds.length; index++) {
       const childId = childIds[index];
       if (!childId) continue;
+      const isLast = index === childIds.length - 1;
       this.addTurnRows(
         rows,
         childId,
         depth + 1,
-        childPrefix,
-        index === childIds.length - 1,
+        `${linearPrefix}${isLast ? "└─ " : "├─ "}`,
+        `${linearPrefix}${isLast ? "   " : "│  "}`,
         visibleTurnIds,
       );
     }
