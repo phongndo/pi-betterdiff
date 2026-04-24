@@ -191,6 +191,22 @@ describe("DiffReviewComponent", () => {
     );
   });
 
+  it("uses scoped item offsets for turn page movement", () => {
+    const component = createComponent(buildTwoTurnModel());
+
+    component.handleInput("\u001b[C");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› user: second change +2 -1 1 file 1 hunk</selectedBg>",
+    );
+
+    component.handleInput("\u001b[D");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› • user: first change +1 -0 1 file 1 hunk</selectedBg>",
+    );
+  });
+
   it("keeps file navigation on files while hunks stay visible until l enters them", () => {
     const component = createComponent(buildPluralModel());
 
@@ -215,6 +231,23 @@ describe("DiffReviewComponent", () => {
     rendered = renderComponent(hunkComponent);
     expect(rendered).toContain(
       "<selectedBg>› │  ├─ ⊞ lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+    );
+  });
+
+  it("uses scoped item offsets for file page movement", () => {
+    const component = createComponent(buildThreeFileModel());
+
+    component.handleInput("l");
+    component.handleInput("\u001b[C");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› └─ ⊟ src/c.ts +3 -0 1 hunk</selectedBg>",
+    );
+
+    component.handleInput("\u001b[D");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› ├─ ⊟ src/a.ts +1 -0 1 hunk</selectedBg>",
     );
   });
 
@@ -244,6 +277,24 @@ describe("DiffReviewComponent", () => {
     diffLineComponent.handleInput("l");
     rendered = renderComponent(diffLineComponent);
     expect(rendered).toContain("<selectedBg>› │  │    +7 changed</selectedBg>");
+  });
+
+  it("uses scoped item offsets for hunk page movement", () => {
+    const component = createComponent(buildThreeHunkModel());
+
+    component.handleInput("l");
+    component.handleInput("l");
+    component.handleInput("\u001b[C");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>›    └─ ⊞ line 30  edit  +3 -0 src/a.ts</selectedBg>",
+    );
+
+    component.handleInput("\u001b[D");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>›    ├─ ⊞ line 10  edit  +1 -0 src/a.ts</selectedBg>",
+    );
   });
 });
 
@@ -318,6 +369,84 @@ function buildPluralModel(): ReviewModel {
             additions: 3,
             removals: 2,
             toolName: "write",
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function buildThreeFileModel(): ReviewModel {
+  return buildReviewModel({
+    prompt: "change three files",
+    files: [
+      {
+        path: "src/a.ts",
+        hunks: [
+          {
+            jumpLine: 10,
+            newLines: 1,
+            additions: 1,
+            removals: 0,
+            toolName: "edit",
+          },
+        ],
+      },
+      {
+        path: "src/b.ts",
+        hunks: [
+          {
+            jumpLine: 20,
+            newLines: 1,
+            additions: 2,
+            removals: 0,
+            toolName: "edit",
+          },
+        ],
+      },
+      {
+        path: "src/c.ts",
+        hunks: [
+          {
+            jumpLine: 30,
+            newLines: 1,
+            additions: 3,
+            removals: 0,
+            toolName: "edit",
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function buildThreeHunkModel(): ReviewModel {
+  return buildReviewModel({
+    prompt: "change three hunks",
+    files: [
+      {
+        path: "src/a.ts",
+        hunks: [
+          {
+            jumpLine: 10,
+            newLines: 1,
+            additions: 1,
+            removals: 0,
+            toolName: "edit",
+          },
+          {
+            jumpLine: 20,
+            newLines: 1,
+            additions: 2,
+            removals: 0,
+            toolName: "edit",
+          },
+          {
+            jumpLine: 30,
+            newLines: 1,
+            additions: 3,
+            removals: 0,
+            toolName: "edit",
           },
         ],
       },

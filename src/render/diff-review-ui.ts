@@ -746,15 +746,15 @@ export class DiffReviewComponent implements Component {
     );
     const currentRow = rows[currentIndex];
     if (currentRow?.kind === "turn") {
-      this.selectRow(this.turnRowForMovement(rows, currentIndex, delta)?.id);
+      this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
       return;
     }
     if (currentRow?.kind === "file") {
-      this.selectRow(this.fileRowForMovement(rows, currentIndex, delta)?.id);
+      this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
       return;
     }
     if (currentRow?.kind === "hunk") {
-      this.selectRow(this.hunkRowForMovement(rows, currentIndex, delta)?.id);
+      this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
       return;
     }
 
@@ -762,66 +762,36 @@ export class DiffReviewComponent implements Component {
     this.selectRow(rows[nextIndex]?.id);
   }
 
-  private turnRowForMovement(
+  private scopedRowForMovement<T extends TurnRow | FileRow | HunkRow>(
     rows: readonly RenderRow[],
-    currentIndex: number,
+    currentRow: T,
     delta: number,
-  ): TurnRow | undefined {
-    const direction = Math.sign(delta);
-    if (direction === 0) {
-      const row = rows[currentIndex];
-      return row?.kind === "turn" ? row : undefined;
-    }
+  ): T | undefined {
+    const siblings = rows.filter((row): row is T =>
+      this.isSameNavigationScope(currentRow, row),
+    );
+    if (siblings.length === 0) return undefined;
 
-    let index = clamp(currentIndex + delta, 0, rows.length - 1);
-    while (index >= 0 && index < rows.length) {
-      const row = rows[index];
-      if (row?.kind === "turn") return row;
-      index += direction;
-    }
-    return undefined;
+    const currentIndex = siblings.findIndex((row) => row.id === currentRow.id);
+    if (currentIndex === -1) return undefined;
+
+    const nextIndex = clamp(currentIndex + delta, 0, siblings.length - 1);
+    return siblings[nextIndex];
   }
 
-  private fileRowForMovement(
-    rows: readonly RenderRow[],
-    currentIndex: number,
-    delta: number,
-  ): FileRow | undefined {
-    const direction = Math.sign(delta);
-    if (direction === 0) {
-      const row = rows[currentIndex];
-      return row?.kind === "file" ? row : undefined;
+  private isSameNavigationScope<T extends TurnRow | FileRow | HunkRow>(
+    currentRow: T,
+    candidate: RenderRow,
+  ): candidate is T {
+    if (currentRow.kind === "turn") return candidate.kind === "turn";
+    if (currentRow.kind === "file") {
+      return (
+        candidate.kind === "file" && candidate.turn.id === currentRow.turn.id
+      );
     }
-
-    let index = clamp(currentIndex + delta, 0, rows.length - 1);
-    while (index >= 0 && index < rows.length) {
-      const row = rows[index];
-      if (row?.kind === "turn") return undefined;
-      if (row?.kind === "file") return row;
-      index += direction;
-    }
-    return undefined;
-  }
-
-  private hunkRowForMovement(
-    rows: readonly RenderRow[],
-    currentIndex: number,
-    delta: number,
-  ): HunkRow | undefined {
-    const direction = Math.sign(delta);
-    if (direction === 0) {
-      const row = rows[currentIndex];
-      return row?.kind === "hunk" ? row : undefined;
-    }
-
-    let index = clamp(currentIndex + delta, 0, rows.length - 1);
-    while (index >= 0 && index < rows.length) {
-      const row = rows[index];
-      if (row?.kind === "turn" || row?.kind === "file") return undefined;
-      if (row?.kind === "hunk") return row;
-      index += direction;
-    }
-    return undefined;
+    return (
+      candidate.kind === "hunk" && candidate.file.id === currentRow.file.id
+    );
   }
 
   private moveToHunk(delta: number): void {

@@ -22,6 +22,15 @@ Track follow-up items from the review of `9164cdc` (`style: improve diff metadat
   - **Required test:** Existing renderer tests must still pass and verify hunk labels render correctly from `jumpLine`, `newLines`, `toolName`, `additions`, and `removals`.
   - **Fixed in working tree:** `ReviewHunk.header` and `formatHunkHeader()` were removed; renderer tests now build hunks without any header string.
 
+- [x] **Fix scoped navigation page movement using flat row offsets.**
+  - **Location:** `src/render/diff-review-ui.ts:740-800`, `test/diff-review-ui.test.ts`
+  - **Context:** Scoped navigation made `j/k` stay at the current tree level for turns/files/hunks, but the same code used the flat rendered-row `delta` for page movement (`ctrl+u/d`, left/right). A large page delta could skip past all valid same-level siblings before searching, so paging from a file or hunk could silently do nothing.
+  - **Why this is an issue:** The UI advertises page movement. Once inline detail rows are visible, flat row offsets and same-level navigation offsets are different concepts. Mixing them makes scoped movement brittle and unpredictable.
+  - **How to verify:** Open a model with three files or three hunks, select the first file/hunk, then press right / page-down. It should land on the last same-level file/hunk, not stay stuck on the first row.
+  - **Smallest acceptable fix:** Build the list of visible same-scope siblings first, find the selected sibling index, then clamp `index + delta` within that sibling list.
+  - **Required test:** Renderer/input tests for turn, file, and hunk page movement using right/left key input, proving page movement clamps within same-level siblings.
+  - **Fixed in working tree:** `scopedRowForMovement()` now applies deltas to same-scope sibling lists; tests cover turn, file, and hunk page movement.
+
 - [x] **Add behavior-level renderer coverage for the changed UI output.**
   - **Location:** `test/diff-review-ui.test.ts`
   - **Context:** The change alters visible output for summary rows, turn rows, file rows, and hunk rows in `src/render/diff-review-ui.ts`, so renderer behavior needs direct coverage beyond model construction and extension registration.
