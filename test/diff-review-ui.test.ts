@@ -768,6 +768,81 @@ describe("DiffReviewComponent", () => {
       "<selectedBg>›    ├─   line 10  edit  +1 -0 src/a.ts</selectedBg>",
     );
   });
+
+  it("searches visible BetterDiff tree rows and cycles matches", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("/");
+    for (const char of "src/b.ts") component.handleInput(char);
+    let rendered = renderComponent(component);
+
+    expect(rendered).toContain("Search: src/b.ts▌  1/2");
+    expect(rendered).toContain(
+      "<selectedBg>› └─ ⊟ src/b.ts +3 -2 1 hunk</selectedBg>",
+    );
+
+    component.handleInput("\r");
+    component.handleInput("n");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("Search: src/b.ts  2/2");
+    expect(rendered).toContain(
+      "<selectedBg>›    └─   lines 30-31  write  +3 -2 src/b.ts</selectedBg>",
+    );
+
+    component.handleInput("N");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("Search: src/b.ts  1/2");
+    expect(rendered).toContain(
+      "<selectedBg>› └─ ⊟ src/b.ts +3 -2 1 hunk</selectedBg>",
+    );
+  });
+
+  it("does not search rows hidden by collapsed file details", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("l");
+    component.handleInput("c");
+    component.handleInput("/");
+    for (const char of "line 7") component.handleInput(char);
+    const rendered = renderComponent(component);
+
+    expect(rendered).toContain("Search: line 7▌  no matches");
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>",
+    );
+    expect(rendered).toContain("├─ ⊞ src/a.ts +3 -1 2 hunks");
+    expect(rendered).not.toContain("lines 7-9  edit  +2 -1 src/a.ts");
+  });
+
+  it("greps hidden BetterDiff content and reveals the matched row", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("l");
+    component.handleInput("c");
+    component.handleInput("?");
+    for (const char of "line 7") component.handleInput(char);
+    const rendered = renderComponent(component);
+
+    expect(rendered).toContain("Grep: line 7▌  1/1");
+    expect(rendered).toContain("├─ ⊟ src/a.ts +3 -1 2 hunks");
+    expect(rendered).toContain(
+      "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+    );
+  });
+
+  it("greps across turns whose details are not currently rendered", () => {
+    const component = createComponent(buildTwoTurnModel());
+
+    component.handleInput("?");
+    for (const char of "second.ts") component.handleInput(char);
+    const rendered = renderComponent(component);
+
+    expect(rendered).toContain("Grep: second.ts▌  1/2");
+    expect(rendered).toContain(
+      "<selectedBg>› └─ ⊟ src/second.ts +2 -1 1 hunk</selectedBg>",
+    );
+    expect(rendered).toContain("lines 2-3  write  +2 -1 src/second.ts");
+  });
 });
 
 function renderModel(model: ReviewModel, renderTheme: Theme = theme): string {

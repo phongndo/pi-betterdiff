@@ -130,7 +130,7 @@ Feature goals for future BetterDiff diff modes and navigation/search capabilitie
 
 ## Search and grep goals
 
-- [ ] **Tree-style search inside BetterDiff**
+- [x] **Tree-style search inside BetterDiff**
   - **User goal:** Quickly jump to a visible review item the same way users expect to search in pi's tree UI.
   - **Primary command/use case:** Search across rendered BetterDiff tree labels without leaving the diff review UI.
   - **Search target:** Tree rows, not raw file contents.

@@ -116,6 +116,17 @@ interface ActionMenuState {
   selectedIndex: number;
 }
 
+type SearchMode = "tree" | "grep";
+
+interface SearchMatch {
+  id: string;
+  kind: RenderRow["kind"];
+  turn: ReviewTurn;
+  file?: ReviewFile;
+  hunk?: ReviewHunk;
+  text: string;
+}
+
 interface DiffModeChoice {
   kind: ReviewModeKind;
   label: string;
@@ -173,6 +184,9 @@ export class DiffReviewComponent implements Component {
   private loadingMessage: string | undefined;
   private loadRequestId = 0;
   private actionMenu: ActionMenuState | undefined;
+  private searchEditing = false;
+  private searchMode: SearchMode = "tree";
+  private searchQuery = "";
 
   constructor(
     private model: ReviewModel,
@@ -221,7 +235,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. m: mode. r: refresh. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. /: search. ?: grep all. n/N: next/prev. m: mode. r: refresh. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -239,6 +253,8 @@ export class DiffReviewComponent implements Component {
         truncateToWidth(`  ${this.theme.fg("warning", this.notice)}`, width),
       );
     }
+    const searchLine = this.renderSearchLine(width);
+    if (searchLine) lines.push(searchLine);
     lines.push(...this.renderActionMenu(width));
     lines.push(...border.render(width));
     lines.push("");
@@ -301,6 +317,7 @@ export class DiffReviewComponent implements Component {
       (this.model.mode.description ? 1 : 0) +
       (this.loadingMessage ? 1 : 0) +
       (this.notice ? 1 : 0) +
+      (this.hasSearchLine() ? 1 : 0) +
       this.getActionMenuLineCount(width);
     return Math.max(5, this.tui.terminal.rows - reservedLines);
   }
@@ -321,6 +338,38 @@ export class DiffReviewComponent implements Component {
 
   private getActionMenuPromptWidth(width: number): number {
     return Math.max(10, width - 4);
+  }
+
+  private renderSearchLine(width: number): string | undefined {
+    if (!this.hasSearchLine()) return undefined;
+
+    const { total, selectedIndex } = this.searchStatus();
+    const label = this.searchMode === "grep" ? "Grep:" : "Search:";
+    const query = this.searchQuery
+      ? this.theme.fg("accent", this.searchQuery)
+      : this.theme.fg("muted", "(type query)");
+    const cursor = this.searchEditing ? this.theme.fg("accent", "▌") : "";
+    const countText =
+      this.searchQuery.trim().length === 0
+        ? ""
+        : total === 0
+          ? "no matches"
+          : selectedIndex === undefined
+            ? `${total} match${total === 1 ? "" : "es"}`
+            : `${selectedIndex + 1}/${total}`;
+    const hint = this.searchEditing
+      ? "enter: keep. esc: close."
+      : `n/N: next/prev. ${this.searchMode === "grep" ? "?: edit grep." : "/: edit search."}`;
+    const suffix = [countText, hint].filter(Boolean).join(" · ");
+
+    return truncateToWidth(
+      `  ${this.theme.fg("muted", label)} ${query}${cursor}${suffix ? this.theme.fg("muted", `  ${suffix}`) : ""}`,
+      width,
+    );
+  }
+
+  private hasSearchLine(): boolean {
+    return this.searchEditing || this.searchQuery.length > 0;
   }
 
   private renderActionMenu(width: number): string[] {
@@ -416,6 +465,13 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
+    if (this.searchEditing) {
+      this.clearPendingBracket();
+      this.pendingG = false;
+      this.handleSearchInput(data);
+      return;
+    }
+
     if (
       this.pendingBracket &&
       (this.matchesCancel(data) || data === "q" || data === "Q")
@@ -441,6 +497,18 @@ export class DiffReviewComponent implements Component {
 
     if (data === "q" || data === "Q") {
       this.done({ type: "close" });
+      return;
+    }
+
+    if (data === "/") {
+      this.openSearch("tree");
+      this.tui.requestRender();
+      return;
+    }
+
+    if (data === "?") {
+      this.openSearch("grep");
+      this.tui.requestRender();
       return;
     }
 
@@ -472,6 +540,10 @@ export class DiffReviewComponent implements Component {
       this.moveSelection(-1);
     } else if (this.matchesSelectDown(data) || data === "j") {
       this.moveSelection(1);
+    } else if (data === "n") {
+      this.moveSearch(1);
+    } else if (data === "N") {
+      this.moveSearch(-1);
     } else if (this.matchesPageUp(data) || matchesKey(data, "ctrl+u")) {
       this.moveSelection(-Math.max(1, this.lastPageSize));
     } else if (this.matchesPageDown(data) || matchesKey(data, "ctrl+d")) {
@@ -546,6 +618,47 @@ export class DiffReviewComponent implements Component {
     }
 
     this.tui.requestRender();
+  }
+
+  private handleSearchInput(data: string): void {
+    if (this.matchesCancel(data)) {
+      this.searchEditing = false;
+      this.tui.requestRender();
+      return;
+    }
+
+    if (this.matchesConfirm(data)) {
+      this.searchEditing = false;
+      if (this.searchQuery.trim().length === 0) {
+        this.searchQuery = "";
+      } else if (this.searchMatches().length === 0) {
+        this.notice = `No matches for "${this.searchQuery}".`;
+      }
+      this.tui.requestRender();
+      return;
+    }
+
+    if (this.matchesDeleteBackward(data)) {
+      const chars = [...this.searchQuery];
+      chars.pop();
+      this.searchQuery = chars.join("");
+      this.selectCurrentSearchMatch();
+      this.tui.requestRender();
+      return;
+    }
+
+    if (!isPrintableInput(data)) return;
+
+    this.searchQuery += data;
+    this.selectCurrentSearchMatch();
+    this.tui.requestRender();
+  }
+
+  private openSearch(mode: SearchMode): void {
+    this.searchMode = mode;
+    this.searchEditing = true;
+    this.notice = undefined;
+    this.selectCurrentSearchMatch();
   }
 
   private moveActionMenuSelection(delta: number): void {
@@ -732,6 +845,9 @@ export class DiffReviewComponent implements Component {
     this.pendingG = false;
     this.clearPendingBracket();
     this.actionMenu = undefined;
+    this.searchEditing = false;
+    this.searchMode = "tree";
+    this.searchQuery = "";
 
     this.indexModel();
     this.foldDetailHunksByDefault();
@@ -989,6 +1105,13 @@ export class DiffReviewComponent implements Component {
     return (
       this.keybindings.matches(data, "app.editor.external") ||
       matchesKey(data, "ctrl+g")
+    );
+  }
+
+  private matchesDeleteBackward(data: string): boolean {
+    return (
+      this.keybindings.matches(data, "tui.editor.deleteCharBackward") ||
+      matchesKey(data, "backspace")
     );
   }
 
@@ -1346,15 +1469,32 @@ export class DiffReviewComponent implements Component {
   }
 
   private formatHunkRegion(hunk: ReviewHunk): string {
+    const { end, label, start } = this.hunkRegion(hunk);
+    return end === start
+      ? `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}`
+      : `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}${this.theme.fg("muted", "-")}${this.theme.fg("borderAccent", String(end))}`;
+  }
+
+  private hunkRegionText(hunk: ReviewHunk): string {
+    const { end, label, start } = this.hunkRegion(hunk);
+    return end === start ? `${label} ${start}` : `${label} ${start}-${end}`;
+  }
+
+  private hunkRegion(hunk: ReviewHunk): {
+    end: number;
+    label: "line" | "lines";
+    start: number;
+  } {
     const start = hunk.jumpLine;
     const end =
       hunk.newLines && hunk.newLines > 1
         ? hunk.jumpLine + hunk.newLines - 1
         : hunk.jumpLine;
-    const label = end === start ? "line" : "lines";
-    return end === start
-      ? `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}`
-      : `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}${this.theme.fg("muted", "-")}${this.theme.fg("borderAccent", String(end))}`;
+    return {
+      end,
+      label: end === start ? "line" : "lines",
+      start,
+    };
   }
 
   private renderDiffLine(line: string, filePath: string): string {
@@ -1387,6 +1527,246 @@ export class DiffReviewComponent implements Component {
       highlightCode(content, language)[0] ??
       this.theme.fg("toolOutput", content)
     );
+  }
+
+  private selectCurrentSearchMatch(): void {
+    const match = this.findSearchMatch(1, true);
+    if (match) this.selectSearchMatch(match);
+  }
+
+  private moveSearch(delta: 1 | -1): void {
+    if (this.searchQuery.trim().length === 0) {
+      this.notice = "No active search. Press / for visible rows or ? for grep.";
+      return;
+    }
+
+    const match = this.findSearchMatch(delta, false);
+    if (!match) {
+      this.notice = `No ${this.searchMode === "grep" ? "grep " : ""}matches for "${this.searchQuery}".`;
+      return;
+    }
+
+    this.selectSearchMatch(match);
+  }
+
+  private findSearchMatch(
+    delta: 1 | -1,
+    includeCurrent: boolean,
+  ): SearchMatch | undefined {
+    const matches = this.searchMatches();
+    if (matches.length === 0) return undefined;
+
+    const selectedIndex = matches.findIndex(
+      (match) => match.id === this.selectedId,
+    );
+    const startIndex =
+      selectedIndex !== -1
+        ? selectedIndex
+        : includeCurrent
+          ? 0
+          : delta > 0
+            ? -1
+            : 0;
+    const firstStep = includeCurrent ? 0 : 1;
+
+    for (let step = firstStep; step < matches.length + firstStep; step++) {
+      const index = positiveModulo(startIndex + delta * step, matches.length);
+      const match = matches[index];
+      if (match) return match;
+    }
+
+    return undefined;
+  }
+
+  private selectSearchMatch(match: SearchMatch): void {
+    if (this.searchMode === "grep") {
+      this.revealSearchMatch(match);
+      return;
+    }
+
+    this.selectRow(match.id);
+  }
+
+  private revealSearchMatch(match: SearchMatch): void {
+    for (let parentId = this.parentById.get(match.turn.id); parentId; ) {
+      this.foldedBranchIds.delete(parentId);
+      parentId = this.parentById.get(parentId);
+    }
+
+    if (match.kind !== "turn") {
+      this.detailTurnId = match.turn.id;
+    }
+    if ((match.kind === "hunk" || match.kind === "diff") && match.file) {
+      this.foldedDetailIds.delete(match.file.id);
+    }
+
+    this.invalidateRows();
+    this.selectRow(match.id);
+  }
+
+  private searchStatus(): { total: number; selectedIndex: number | undefined } {
+    const matches = this.searchMatches();
+    const selectedIndex = matches.findIndex(
+      (match) => match.id === this.selectedId,
+    );
+    return {
+      total: matches.length,
+      selectedIndex: selectedIndex === -1 ? undefined : selectedIndex,
+    };
+  }
+
+  private searchMatches(): SearchMatch[] {
+    const tokens = searchTokens(this.searchQuery);
+    if (tokens.length === 0) return [];
+    return this.searchTargets().filter((match) =>
+      this.searchTextMatches(match.text, tokens),
+    );
+  }
+
+  private searchTargets(): SearchMatch[] {
+    if (this.searchMode === "grep") return this.grepSearchTargets();
+    return this.getRows().map((row) => this.searchMatchForRow(row));
+  }
+
+  private grepSearchTargets(): SearchMatch[] {
+    const matches: SearchMatch[] = [];
+    const visitedTurnIds = new Set<string>();
+    const addTurn = (turnId: string): void => {
+      if (visitedTurnIds.has(turnId)) return;
+      const turn = this.turnsById.get(turnId);
+      if (!turn) return;
+      visitedTurnIds.add(turnId);
+
+      matches.push({
+        id: turn.id,
+        kind: "turn",
+        turn,
+        text: this.searchableTextForTurn(turn),
+      });
+
+      for (const file of turn.files) {
+        matches.push({
+          id: file.id,
+          kind: "file",
+          turn,
+          file,
+          text: this.searchableTextForFile(file),
+        });
+
+        for (const hunk of file.hunks) {
+          matches.push({
+            id: hunk.id,
+            kind: "hunk",
+            turn,
+            file,
+            hunk,
+            text: this.searchableTextForHunk(hunk),
+          });
+
+          for (let index = 0; index < hunk.bodyLines.length; index++) {
+            matches.push({
+              id: `${hunk.id}:line:${index}`,
+              kind: "diff",
+              turn,
+              file,
+              hunk,
+              text: hunk.bodyLines[index] ?? "",
+            });
+          }
+        }
+      }
+
+      for (const childId of this.sortActiveFirst(
+        this.childrenById.get(turn.id) ?? [],
+      )) {
+        addTurn(childId);
+      }
+    };
+
+    for (const rootId of this.sortActiveFirst(
+      this.model.roots.map((root) => root.id),
+    )) {
+      addTurn(rootId);
+    }
+    for (const turn of this.model.turns) addTurn(turn.id);
+
+    return matches;
+  }
+
+  private searchMatchForRow(row: RenderRow): SearchMatch {
+    if (row.kind === "turn") {
+      return {
+        id: row.id,
+        kind: row.kind,
+        turn: row.turn,
+        text: this.searchableTextForTurn(row.turn),
+      };
+    }
+
+    if (row.kind === "file") {
+      return {
+        id: row.id,
+        kind: row.kind,
+        turn: row.turn,
+        file: row.file,
+        text: this.searchableTextForFile(row.file),
+      };
+    }
+
+    if (row.kind === "hunk") {
+      return {
+        id: row.id,
+        kind: row.kind,
+        turn: row.turn,
+        file: row.file,
+        hunk: row.hunk,
+        text: this.searchableTextForHunk(row.hunk),
+      };
+    }
+
+    return {
+      id: row.id,
+      kind: row.kind,
+      turn: row.turn,
+      file: row.file,
+      hunk: row.hunk,
+      text: row.text,
+    };
+  }
+
+  private searchTextMatches(text: string, tokens: readonly string[]): boolean {
+    const normalizedText = text.toLowerCase();
+    return tokens.every((token) => normalizedText.includes(token));
+  }
+
+  private searchableTextForTurn(turn: ReviewTurn): string {
+    const hunkCount = turn.files.reduce(
+      (total, file) => total + file.hunks.length,
+      0,
+    );
+    return [
+      this.turnLabel(turn),
+      this.statPlainText(turn),
+      `${turn.files.length} file${turn.files.length === 1 ? "" : "s"}`,
+      `${hunkCount} hunk${hunkCount === 1 ? "" : "s"}`,
+    ].join(" ");
+  }
+
+  private searchableTextForFile(file: ReviewFile): string {
+    return [
+      file.path,
+      this.statPlainText(file),
+      `${file.hunks.length} hunk${file.hunks.length === 1 ? "" : "s"}`,
+    ].join(" ");
+  }
+
+  private searchableTextForHunk(hunk: ReviewHunk): string {
+    return [
+      this.hunkRegionText(hunk),
+      hunk.toolName,
+      this.statPlainText(hunk),
+      hunk.path,
+    ].join(" ");
   }
 
   private moveSelection(delta: number): void {
@@ -1786,6 +2166,13 @@ export class DiffReviewComponent implements Component {
     return `${this.theme.fg("toolDiffAdded", `+${stats.additions}`)} ${this.theme.fg("toolDiffRemoved", `-${stats.removals}`)}`;
   }
 
+  private statPlainText(stats: {
+    additions: number;
+    removals: number;
+  }): string {
+    return `+${stats.additions} -${stats.removals}`;
+  }
+
   private hunkCountText(hunkCount: number): string {
     return `${this.theme.fg("warning", String(hunkCount))} ${this.theme.fg("muted", `hunk${hunkCount === 1 ? "" : "s"}`)}`;
   }
@@ -2144,6 +2531,22 @@ function requestLabel(request: DiffReviewLoadRequest): string {
     DIFF_MODE_CHOICES.find((choice) => choice.kind === request.kind)?.label ??
     request.kind
   );
+}
+
+function searchTokens(query: string): string[] {
+  return query.toLowerCase().split(/\s+/u).filter(Boolean);
+}
+
+function isPrintableInput(data: string): boolean {
+  if (data.length === 0) return false;
+  return [...data].every((char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code >= 32 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
+  });
+}
+
+function positiveModulo(value: number, modulus: number): number {
+  return ((value % modulus) + modulus) % modulus;
 }
 
 function clamp(value: number, min: number, max: number): number {
