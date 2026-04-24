@@ -13,13 +13,14 @@ Track follow-up items from the review of `9164cdc` (`style: improve diff metadat
   - **Required test:** Renderer behavior test proving hunk label rendering does not lose custom/extra header metadata and does not mix inconsistent header/tool/stat sources.
   - **Fixed in working tree:** `DiffReviewComponent` now formats hunk regions from structured `ReviewHunk` fields instead of parsing `hunk.header`; `test/diff-review-ui.test.ts` verifies custom/garbage headers do not drive rendering.
 
-- [ ] **Add behavior-level renderer coverage for the changed UI output.**
-  - **Location:** `test/` currently has no tests for `DiffReviewComponent.render()`.
-  - **Context:** The change alters visible output for summary rows, turn rows, file rows, and hunk rows in `src/render/diff-review-ui.ts`, but existing tests only cover model construction and extension registration.
-  - **Why this is an issue:** This patch is almost entirely presentation behavior. `npm test` can pass while the rendered summary, hunk label, path, stats, or pluralization is wrong.
-  - **How to verify:** Run `rg -n "DiffReviewComponent|render\(" test src/render`. There is no renderer test exercising the actual output. `npm run check` passes despite this gap.
+- [x] **Add behavior-level renderer coverage for the changed UI output.**
+  - **Location:** `test/diff-review-ui.test.ts`
+  - **Context:** The change alters visible output for summary rows, turn rows, file rows, and hunk rows in `src/render/diff-review-ui.ts`, so renderer behavior needs direct coverage beyond model construction and extension registration.
+  - **Why this is an issue:** This patch is almost entirely presentation behavior. Without render tests, `npm test` can pass while the rendered summary, hunk label, path, stats, or pluralization is wrong.
+  - **How to verify:** Run `npm run test -- test/diff-review-ui.test.ts` or `npm run check`. The renderer tests exercise `DiffReviewComponent.render()` with fake `Theme`, `TUI`, and `KeybindingsManager` instances.
   - **Smallest acceptable fix:** Add a focused render test using a minimal `ReviewModel`, fake `Theme`, fake `TUI`, and fake `KeybindingsManager`. Assert behavior-visible text, not ANSI implementation trivia.
   - **Required test:** Render a model with one turn, one file, and one hunk; verify the output includes the turn summary, file hunk count, hunk line range, tool name, stats, and path.
+  - **Fixed in working tree:** `test/diff-review-ui.test.ts` now verifies summary text, selected turn text, file rows, hunk rows, pluralization, and selected-row styling using deterministic fake theme output.
 
 ## Suspicious patterns to clean up
 
@@ -32,7 +33,7 @@ Track follow-up items from the review of `9164cdc` (`style: improve diff metadat
 
 ## Concrete missing tests
 
-- [ ] Renderer test for hunk rows with `line 7`, `lines 7-9`, and malformed/custom header text.
-- [ ] Renderer test for pluralization: `1 hunk` vs `2 hunks`, `1 file` vs `2 files`.
-- [ ] Renderer test for summary totals with additions/removals split across color segments.
-- [ ] Renderer test for selected and unselected detail rows without asserting raw ANSI escape implementation details.
+- [x] Renderer test for hunk rows with `line 7`, `lines 7-9`, and malformed/custom header text.
+- [x] Renderer test for pluralization: `1 hunk` vs `2 hunks`, `1 file` vs `2 files`.
+- [x] Renderer test for summary totals with additions/removals split across color segments.
+- [x] Renderer test for selected and unselected detail rows without asserting raw ANSI escape implementation details.

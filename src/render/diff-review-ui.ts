@@ -744,8 +744,84 @@ export class DiffReviewComponent implements Component {
       0,
       rows.findIndex((row) => row.id === this.selectedId),
     );
+    const currentRow = rows[currentIndex];
+    if (currentRow?.kind === "turn") {
+      this.selectRow(this.turnRowForMovement(rows, currentIndex, delta)?.id);
+      return;
+    }
+    if (currentRow?.kind === "file") {
+      this.selectRow(this.fileRowForMovement(rows, currentIndex, delta)?.id);
+      return;
+    }
+    if (currentRow?.kind === "hunk") {
+      this.selectRow(this.hunkRowForMovement(rows, currentIndex, delta)?.id);
+      return;
+    }
+
     const nextIndex = clamp(currentIndex + delta, 0, rows.length - 1);
     this.selectRow(rows[nextIndex]?.id);
+  }
+
+  private turnRowForMovement(
+    rows: readonly RenderRow[],
+    currentIndex: number,
+    delta: number,
+  ): TurnRow | undefined {
+    const direction = Math.sign(delta);
+    if (direction === 0) {
+      const row = rows[currentIndex];
+      return row?.kind === "turn" ? row : undefined;
+    }
+
+    let index = clamp(currentIndex + delta, 0, rows.length - 1);
+    while (index >= 0 && index < rows.length) {
+      const row = rows[index];
+      if (row?.kind === "turn") return row;
+      index += direction;
+    }
+    return undefined;
+  }
+
+  private fileRowForMovement(
+    rows: readonly RenderRow[],
+    currentIndex: number,
+    delta: number,
+  ): FileRow | undefined {
+    const direction = Math.sign(delta);
+    if (direction === 0) {
+      const row = rows[currentIndex];
+      return row?.kind === "file" ? row : undefined;
+    }
+
+    let index = clamp(currentIndex + delta, 0, rows.length - 1);
+    while (index >= 0 && index < rows.length) {
+      const row = rows[index];
+      if (row?.kind === "turn") return undefined;
+      if (row?.kind === "file") return row;
+      index += direction;
+    }
+    return undefined;
+  }
+
+  private hunkRowForMovement(
+    rows: readonly RenderRow[],
+    currentIndex: number,
+    delta: number,
+  ): HunkRow | undefined {
+    const direction = Math.sign(delta);
+    if (direction === 0) {
+      const row = rows[currentIndex];
+      return row?.kind === "hunk" ? row : undefined;
+    }
+
+    let index = clamp(currentIndex + delta, 0, rows.length - 1);
+    while (index >= 0 && index < rows.length) {
+      const row = rows[index];
+      if (row?.kind === "turn" || row?.kind === "file") return undefined;
+      if (row?.kind === "hunk") return row;
+      index += direction;
+    }
+    return undefined;
   }
 
   private moveToHunk(delta: number): void {
