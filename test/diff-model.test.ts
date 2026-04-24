@@ -1,7 +1,15 @@
 import type { SessionEntry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
-import { buildReviewModel } from "../src/diff/model.js";
+import {
+  buildReviewModel,
+  buildReviewModelFromTree,
+} from "../src/diff/model.js";
+
+interface TestTreeNode {
+  entry: SessionEntry;
+  children: TestTreeNode[];
+}
 
 const usage = {
   input: 0,
@@ -82,6 +90,186 @@ describe("buildReviewModel", () => {
     expect(
       model.turns[0]?.files[0]?.hunks.map((hunk) => hunk.jumpLine),
     ).toEqual([2, 11]);
+  });
+
+  it("builds a compressed diff-producing turn tree from session branches", () => {
+    const u1: SessionEntry = {
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: "2026-04-23T00:00:00.000Z",
+      message: { role: "user", content: "create base", timestamp: 1 },
+    };
+    const a1: SessionEntry = {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp: "2026-04-23T00:00:01.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-base",
+            name: "write",
+            arguments: { path: "README.md", content: "# Base\n" },
+          },
+        ],
+        api: "test-api",
+        provider: "test-provider",
+        model: "test-model",
+        usage,
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+    };
+    const t1: SessionEntry = {
+      type: "message",
+      id: "t1",
+      parentId: "a1",
+      timestamp: "2026-04-23T00:00:02.000Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-base",
+        toolName: "write",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 3,
+      },
+    };
+    const u2a: SessionEntry = {
+      type: "message",
+      id: "u2a",
+      parentId: "t1",
+      timestamp: "2026-04-23T00:00:03.000Z",
+      message: { role: "user", content: "branch alpha", timestamp: 4 },
+    };
+    const a2a: SessionEntry = {
+      type: "message",
+      id: "a2a",
+      parentId: "u2a",
+      timestamp: "2026-04-23T00:00:04.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-alpha",
+            name: "edit",
+            arguments: { path: "src/a.ts" },
+          },
+        ],
+        api: "test-api",
+        provider: "test-provider",
+        model: "test-model",
+        usage,
+        stopReason: "toolUse",
+        timestamp: 5,
+      },
+    };
+    const t2a: SessionEntry = {
+      type: "message",
+      id: "t2a",
+      parentId: "a2a",
+      timestamp: "2026-04-23T00:00:05.000Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-alpha",
+        toolName: "edit",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        details: { diff: " 1 keep\n+2 alpha", firstChangedLine: 2 },
+        timestamp: 6,
+      },
+    };
+    const u2b: SessionEntry = {
+      type: "message",
+      id: "u2b",
+      parentId: "t1",
+      timestamp: "2026-04-23T00:00:06.000Z",
+      message: { role: "user", content: "branch beta", timestamp: 7 },
+    };
+    const a2b: SessionEntry = {
+      type: "message",
+      id: "a2b",
+      parentId: "u2b",
+      timestamp: "2026-04-23T00:00:07.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-beta",
+            name: "write",
+            arguments: { path: "src/b.ts", content: "export const b = 1;\n" },
+          },
+        ],
+        api: "test-api",
+        provider: "test-provider",
+        model: "test-model",
+        usage,
+        stopReason: "toolUse",
+        timestamp: 8,
+      },
+    };
+    const t2b: SessionEntry = {
+      type: "message",
+      id: "t2b",
+      parentId: "a2b",
+      timestamp: "2026-04-23T00:00:08.000Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-beta",
+        toolName: "write",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 9,
+      },
+    };
+    const tree: TestTreeNode[] = [
+      {
+        entry: u1,
+        children: [
+          {
+            entry: a1,
+            children: [
+              {
+                entry: t1,
+                children: [
+                  {
+                    entry: u2a,
+                    children: [
+                      { entry: a2a, children: [{ entry: t2a, children: [] }] },
+                    ],
+                  },
+                  {
+                    entry: u2b,
+                    children: [
+                      { entry: a2b, children: [{ entry: t2b, children: [] }] },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const model = buildReviewModelFromTree(tree);
+
+    expect(model.turns.map((turn) => turn.prompt)).toEqual([
+      "create base",
+      "branch alpha",
+      "branch beta",
+    ]);
+    expect(model.roots).toHaveLength(1);
+    expect(model.roots[0]?.prompt).toBe("create base");
+    expect(model.roots[0]?.children.map((turn) => turn.prompt)).toEqual([
+      "branch alpha",
+      "branch beta",
+    ]);
+    expect(model.roots[0]?.children[0]?.children).toEqual([]);
   });
 
   it("creates a synthetic write hunk from tool call content", () => {

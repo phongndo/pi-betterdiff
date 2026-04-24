@@ -26,61 +26,55 @@ export type DiffReviewAction =
   | { type: "close" }
   | { type: "undo"; targetEntryId: string; label: string };
 
-type ReviewNode = TurnNode | FileNode | HunkNode;
+type FocusMode = "tree" | "details";
 
-interface TurnNode {
-  type: "turn";
+interface TurnRow {
   id: string;
   turn: ReviewTurn;
-  parentId: undefined;
+  depth: number;
+  prefix: string;
 }
 
-interface FileNode {
-  type: "file";
+interface FileDetailRow {
   id: string;
-  turn: ReviewTurn;
+  kind: "file";
+  selectable: false;
   file: ReviewFile;
-  parentId: string;
 }
 
-interface HunkNode {
-  type: "hunk";
+interface HunkDetailRow {
   id: string;
-  turn: ReviewTurn;
+  kind: "hunk";
+  selectable: true;
   file: ReviewFile;
   hunk: ReviewHunk;
-  parentId: string;
 }
 
-type SelectableRow = {
-  id: string;
-  kind: "turn" | "file" | "hunk";
-  depth: number;
-  prefix: string;
-  selectable: true;
-  node: ReviewNode;
-};
-
-type DiffLineRow = {
+interface DiffDetailRow {
   id: string;
   kind: "diff";
-  depth: number;
-  prefix: string;
   selectable: true;
-  node: HunkNode;
+  file: ReviewFile;
+  hunk: ReviewHunk;
   text: string;
-};
+}
 
-type RenderRow = SelectableRow | DiffLineRow;
+type DetailRow = FileDetailRow | HunkDetailRow | DiffDetailRow;
+type SelectableDetailRow = HunkDetailRow | DiffDetailRow;
 
 export class DiffReviewComponent implements Component {
-  private readonly nodesById = new Map<string, ReviewNode>();
+  private readonly turnsById = new Map<string, ReviewTurn>();
   private readonly parentById = new Map<string, string | undefined>();
   private readonly childrenById = new Map<string, string[]>();
   private readonly foldableIds = new Set<string>();
   private readonly foldedIds = new Set<string>();
-  private cachedRows: RenderRow[] | undefined;
-  private selectedId: string | undefined;
+  private cachedTreeRows: TurnRow[] | undefined;
+  private selectedTurnId: string | undefined;
+  private selectedDetailId: string | undefined;
+  private focus: FocusMode = "tree";
+  private detailScrollOffset = 0;
+  private lastTreePageSize = 5;
+  private lastDetailsPageSize = 5;
   private searchQuery = "";
   private pendingG = false;
   private notice: string | undefined;
@@ -94,12 +88,11 @@ export class DiffReviewComponent implements Component {
     private readonly done: (result: DiffReviewAction) => void,
   ) {
     this.indexModel();
-    this.foldHunksByDefault();
-    this.selectedId = this.firstSelectableId();
+    this.selectedTurnId = this.firstSelectableTurnId();
   }
 
   invalidate(): void {
-    this.invalidateRows();
+    this.invalidateTreeRows();
   }
 
   render(width: number): string[] {
@@ -119,7 +112,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→ or h/l: fold/branch. enter: toggle. c/e: collapse/expand. u: undo turn. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. tab: ${this.focus === "tree" ? "diff details" : "tree"}. ←/→ or h/l: fold/branch. enter: toggle. c/e: collapse/expand. u: undo turn. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -138,7 +131,7 @@ export class DiffReviewComponent implements Component {
         truncateToWidth(
           this.theme.fg(
             "muted",
-            "  No edit/write changes found in the current branch.",
+            "  No edit/write changes found in this session tree.",
           ),
           width,
         ),
@@ -157,51 +150,84 @@ export class DiffReviewComponent implements Component {
       return lines;
     }
 
-    const rows = this.getRows();
-    this.ensureSelectionVisible(rows);
-    const maxBodyLines = Math.max(5, Math.floor(this.tui.terminal.rows / 2));
-    const selectedRowIndex = Math.max(
-      0,
-      rows.findIndex((row) => row.id === this.selectedId),
+    const bodyBudget = this.getBodyBudgetLines();
+    const treeRows = this.getTreeRows();
+    this.ensureSelectedTurnVisible(treeRows);
+    const treeHeight = this.calculateTreeHeight(treeRows.length, bodyBudget);
+    this.lastTreePageSize = Math.max(1, treeHeight - 1);
+    const treeStart = this.calculateSelectedWindowStart(
+      treeRows,
+      this.selectedTurnId,
+      treeHeight,
     );
-    const startIndex = Math.max(
-      0,
-      Math.min(
-        selectedRowIndex - Math.floor(maxBodyLines / 2),
-        rows.length - maxBodyLines,
-      ),
-    );
-    const endIndex = Math.min(rows.length, startIndex + maxBodyLines);
+    const treeEnd = Math.min(treeRows.length, treeStart + treeHeight);
 
-    for (let index = startIndex; index < endIndex; index++) {
-      const row = rows[index];
+    for (let index = treeStart; index < treeEnd; index++) {
+      const row = treeRows[index];
       if (!row) continue;
-      lines.push(this.renderRow(row, width));
+      lines.push(this.renderTurnRow(row, width));
     }
 
-    if (rows.length === 0) {
+    if (treeRows.length === 0) {
       lines.push(
         truncateToWidth(
-          this.theme.fg("muted", "  No diff entries found"),
+          this.theme.fg("muted", "  No diff turns match the search."),
           width,
         ),
       );
     }
 
-    const selectableRows = rows.filter(isSelectableRow);
-    const selectedSelectableIndex = selectableRows.findIndex(
-      (row) => row.id === this.selectedId,
+    const detailsHeaderLines = 1;
+    const detailsHeight = Math.max(
+      0,
+      bodyBudget -
+        Math.max(treeHeight, treeRows.length === 0 ? 1 : 0) -
+        detailsHeaderLines,
     );
-    const selectedNode = this.getSelectedNode();
-    const position =
-      selectedSelectableIndex >= 0 ? selectedSelectableIndex + 1 : 0;
-    const status = selectedNode
-      ? `  (${position}/${selectableRows.length}) ${this.describeNode(selectedNode)}`
-      : `  (0/0)`;
-    lines.push(truncateToWidth(this.theme.fg("muted", status), width));
+    if (detailsHeight > 0) {
+      lines.push(this.renderDetailsHeader(width));
+      this.lastDetailsPageSize = Math.max(1, detailsHeight - 1);
+      const detailRows = this.getDetailRows();
+      this.ensureDetailSelection(detailRows);
+      this.ensureDetailScroll(detailRows, detailsHeight);
+      const detailEnd = Math.min(
+        detailRows.length,
+        this.detailScrollOffset + detailsHeight,
+      );
+      for (let index = this.detailScrollOffset; index < detailEnd; index++) {
+        const row = detailRows[index];
+        if (!row) continue;
+        lines.push(this.renderDetailRow(row, width));
+      }
+
+      if (detailRows.length === 0) {
+        lines.push(
+          truncateToWidth(
+            this.theme.fg("muted", "  No changed files on selected turn."),
+            width,
+          ),
+        );
+      }
+    }
+
+    lines.push(
+      truncateToWidth(this.theme.fg("muted", this.statusText()), width),
+    );
     lines.push("");
     lines.push(...border.render(width));
     return lines;
+  }
+
+  private getBodyBudgetLines(): number {
+    const reservedLines = this.notice ? 11 : 10;
+    return Math.max(5, this.tui.terminal.rows - reservedLines);
+  }
+
+  private calculateTreeHeight(rowCount: number, bodyBudget: number): number {
+    if (rowCount === 0) return 0;
+    if (bodyBudget <= 7) return Math.min(rowCount, bodyBudget);
+    const maxTreeHeight = Math.max(3, Math.min(10, Math.floor(bodyBudget / 3)));
+    return Math.min(rowCount, maxTreeHeight);
   }
 
   private renderSearchLine(width: number): string {
@@ -212,17 +238,28 @@ export class DiffReviewComponent implements Component {
     return truncateToWidth(`${label}${query}`, width);
   }
 
-  private ensureSelectionVisible(rows: readonly RenderRow[]): void {
-    if (rows.some((row) => row.selectable && row.id === this.selectedId)) {
-      return;
-    }
-    this.selectedId = rows.find(isSelectableRow)?.id;
+  private renderDetailsHeader(width: number): string {
+    const turn = this.getSelectedTurn();
+    const prompt = turn?.prompt || "(no selected prompt)";
+    const focusText =
+      this.focus === "details"
+        ? this.theme.fg("accent", "diff focus")
+        : this.theme.fg("muted", "tree focus");
+    return truncateToWidth(
+      `  ${this.theme.fg("border", "─")} ${this.theme.bold("Changes for selected prompt")} ${this.theme.fg("muted", "—")} ${focusText} ${this.theme.fg("dim", prompt)}`,
+      width,
+    );
+  }
+
+  private ensureSelectedTurnVisible(rows: readonly TurnRow[]): void {
+    if (rows.some((row) => row.id === this.selectedTurnId)) return;
+    this.selectTurn(rows[0]?.id);
   }
 
   private clearSearch(): void {
     this.searchQuery = "";
     this.foldedIds.clear();
-    this.invalidateRows();
+    this.invalidateTreeRows();
   }
 
   handleInput(data: string): void {
@@ -231,6 +268,9 @@ export class DiffReviewComponent implements Component {
     if (this.keybindings.matches(data, "tui.select.cancel")) {
       if (this.searchQuery) {
         this.clearSearch();
+        this.tui.requestRender();
+      } else if (this.focus === "details") {
+        this.focus = "tree";
         this.tui.requestRender();
       } else {
         this.done({ type: "close" });
@@ -243,11 +283,17 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
+    if (data === "\t") {
+      this.toggleFocus();
+      this.tui.requestRender();
+      return;
+    }
+
     if (this.keybindings.matches(data, "tui.editor.deleteCharBackward")) {
       if (this.searchQuery) {
         this.searchQuery = this.searchQuery.slice(0, -1);
         this.foldedIds.clear();
-        this.invalidateRows();
+        this.invalidateTreeRows();
         this.tui.requestRender();
       }
       return;
@@ -260,52 +306,56 @@ export class DiffReviewComponent implements Component {
     }
 
     if (data === "u" || data === "U") {
-      const node = this.getSelectedNode();
-      if (!node) return;
+      const turn = this.getSelectedTurn();
+      if (!turn) return;
       this.done({
         type: "undo",
-        targetEntryId: node.turn.userEntryId,
-        label: this.turnLabel(node.turn),
+        targetEntryId: turn.userEntryId,
+        label: this.turnLabel(turn),
       });
       return;
     }
 
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
-      this.moveSelection(-1);
+      this.moveFocusedSelection(-1);
     } else if (
       this.keybindings.matches(data, "tui.select.down") ||
       data === "j"
     ) {
-      this.moveSelection(1);
+      this.moveFocusedSelection(1);
     } else if (this.keybindings.matches(data, "tui.select.pageUp")) {
-      this.moveSelection(-Math.max(5, Math.floor(this.tui.terminal.rows / 2)));
+      this.pageFocusedSelection(-1);
     } else if (this.keybindings.matches(data, "tui.select.pageDown")) {
-      this.moveSelection(Math.max(5, Math.floor(this.tui.terminal.rows / 2)));
+      this.pageFocusedSelection(1);
     } else if (this.keybindings.matches(data, "tui.select.confirm")) {
-      this.toggleSelected();
+      if (this.focus === "tree") this.toggleSelectedTurn();
     } else if (
       data === "h" ||
       this.keybindings.matches(data, "app.tree.foldOrUp")
     ) {
+      this.focus = "tree";
       this.collapseOrMoveParent();
     } else if (
       data === "l" ||
       this.keybindings.matches(data, "app.tree.unfoldOrDown")
     ) {
+      this.focus = "tree";
       this.expandOrMoveChild();
     } else if (data === "c" || data === "C") {
-      this.collapseAllDiffs();
+      this.collapseAllBranches();
     } else if (data === "e" || data === "E") {
-      this.expandAll();
+      this.expandAllBranches();
     } else if (data === "]") {
+      this.focus = "details";
       this.moveToHunk(1);
     } else if (data === "[") {
+      this.focus = "details";
       this.moveToHunk(-1);
     } else if (data === "G") {
-      this.selectLast();
+      this.selectFocusedLast();
     } else if (data === "g") {
       if (this.pendingG) {
-        this.selectFirst();
+        this.selectFocusedFirst();
         this.pendingG = false;
       } else {
         this.pendingG = true;
@@ -313,13 +363,16 @@ export class DiffReviewComponent implements Component {
       this.tui.requestRender();
       return;
     } else if (matchesKey(data, "left")) {
+      this.focus = "tree";
       this.collapseOrMoveParent();
     } else if (matchesKey(data, "right")) {
+      this.focus = "tree";
       this.expandOrMoveChild();
     } else if (isPrintableInput(data)) {
       this.searchQuery += data;
       this.foldedIds.clear();
-      this.invalidateRows();
+      this.invalidateTreeRows();
+      this.focus = "tree";
     } else {
       this.pendingG = false;
       return;
@@ -330,218 +383,215 @@ export class DiffReviewComponent implements Component {
   }
 
   private indexModel(): void {
+    for (const root of this.model.roots) {
+      this.addTurnAndChildren(root, undefined);
+    }
     for (const turn of this.model.turns) {
-      const turnNode: TurnNode = {
-        type: "turn",
-        id: turn.id,
-        turn,
-        parentId: undefined,
-      };
-      this.addNode(turnNode);
-      for (const file of turn.files) {
-        const fileNode: FileNode = {
-          type: "file",
-          id: file.id,
-          turn,
-          file,
-          parentId: turn.id,
-        };
-        this.addNode(fileNode);
-        for (const hunk of file.hunks) {
-          const hunkNode: HunkNode = {
-            type: "hunk",
-            id: hunk.id,
-            turn,
-            file,
-            hunk,
-            parentId: file.id,
-          };
-          this.addNode(hunkNode);
-        }
+      if (!this.turnsById.has(turn.id)) {
+        this.addTurnAndChildren(turn, undefined);
       }
     }
-    for (const [id, node] of this.nodesById) {
-      const children = this.childrenById.get(id) ?? [];
-      if (
-        children.length > 0 ||
-        (node.type === "hunk" && node.hunk.bodyLines.length > 0)
-      ) {
-        this.foldableIds.add(id);
-      }
+    for (const [id, children] of this.childrenById) {
+      if (children.length > 0) this.foldableIds.add(id);
     }
   }
 
-  private addNode(node: ReviewNode): void {
-    this.nodesById.set(node.id, node);
-    this.parentById.set(node.id, node.parentId);
-    if (node.parentId) {
-      const siblings = this.childrenById.get(node.parentId) ?? [];
-      siblings.push(node.id);
-      this.childrenById.set(node.parentId, siblings);
+  private addTurnAndChildren(
+    turn: ReviewTurn,
+    parentId: string | undefined,
+  ): void {
+    if (this.turnsById.has(turn.id)) return;
+    this.turnsById.set(turn.id, turn);
+    this.parentById.set(turn.id, parentId);
+    this.childrenById.set(
+      turn.id,
+      turn.children.map((child) => child.id),
+    );
+    for (const child of turn.children) {
+      this.addTurnAndChildren(child, turn.id);
     }
-    this.childrenById.set(node.id, []);
   }
 
-  private foldHunksByDefault(): void {
-    for (const [id, node] of this.nodesById) {
-      if (node.type === "hunk") this.foldedIds.add(id);
-    }
+  private firstSelectableTurnId(): string | undefined {
+    return this.model.roots[0]?.id ?? this.model.turns[0]?.id;
   }
 
-  private firstSelectableId(): string | undefined {
-    return this.model.turns[0]?.id;
+  private getTreeRows(): TurnRow[] {
+    this.cachedTreeRows ??= this.buildTreeRows();
+    return this.cachedTreeRows;
   }
 
-  private getRows(): RenderRow[] {
-    this.cachedRows ??= this.buildRows();
-    return this.cachedRows;
+  private invalidateTreeRows(): void {
+    this.cachedTreeRows = undefined;
   }
 
-  private invalidateRows(): void {
-    this.cachedRows = undefined;
-  }
-
-  private buildRows(): RenderRow[] {
-    const rows: RenderRow[] = [];
-    const visibleNodeIds = this.getSearchVisibleNodeIds();
-    for (let index = 0; index < this.model.turns.length; index++) {
-      const turn = this.model.turns[index];
-      if (!turn) continue;
-      this.addNodeRows(
+  private buildTreeRows(): TurnRow[] {
+    const rows: TurnRow[] = [];
+    const visibleTurnIds = this.getSearchVisibleTurnIds();
+    for (let index = 0; index < this.model.roots.length; index++) {
+      const root = this.model.roots[index];
+      if (!root) continue;
+      this.addTurnRows(
         rows,
-        turn.id,
+        root.id,
         0,
         "",
-        index === this.model.turns.length - 1,
-        visibleNodeIds,
+        index === this.model.roots.length - 1,
+        visibleTurnIds,
       );
     }
     return rows;
   }
 
-  private addNodeRows(
-    rows: RenderRow[],
-    nodeId: string,
+  private addTurnRows(
+    rows: TurnRow[],
+    turnId: string,
     depth: number,
     prefix: string,
     isLast: boolean,
-    visibleNodeIds: ReadonlySet<string> | undefined,
+    visibleTurnIds: ReadonlySet<string> | undefined,
   ): void {
-    if (visibleNodeIds && !visibleNodeIds.has(nodeId)) return;
+    if (visibleTurnIds && !visibleTurnIds.has(turnId)) return;
 
-    const node = this.nodesById.get(nodeId);
-    if (!node) return;
+    const turn = this.turnsById.get(turnId);
+    if (!turn) return;
 
     const rowPrefix = depth === 0 ? "" : `${prefix}${isLast ? "└─ " : "├─ "}`;
     rows.push({
-      id: node.id,
-      kind: node.type,
+      id: turn.id,
+      turn,
       depth,
       prefix: rowPrefix,
-      selectable: true,
-      node,
     });
 
-    if (this.foldedIds.has(node.id)) return;
+    if (this.foldedIds.has(turn.id)) return;
 
     const childPrefix = depth === 0 ? "" : `${prefix}${isLast ? "   " : "│  "}`;
-    const childIds = (this.childrenById.get(node.id) ?? []).filter(
-      (childId) => !visibleNodeIds || visibleNodeIds.has(childId),
+    const childIds = (this.childrenById.get(turn.id) ?? []).filter(
+      (childId) => !visibleTurnIds || visibleTurnIds.has(childId),
     );
     for (let index = 0; index < childIds.length; index++) {
       const childId = childIds[index];
       if (!childId) continue;
-      this.addNodeRows(
+      this.addTurnRows(
         rows,
         childId,
         depth + 1,
         childPrefix,
         index === childIds.length - 1,
-        visibleNodeIds,
+        visibleTurnIds,
       );
-    }
-
-    if (node.type === "hunk") {
-      const diffPrefix = `${childPrefix}   `;
-      for (let index = 0; index < node.hunk.bodyLines.length; index++) {
-        rows.push({
-          id: `${node.id}:line:${index}`,
-          kind: "diff",
-          depth: depth + 1,
-          prefix: diffPrefix,
-          selectable: true,
-          node,
-          text: node.hunk.bodyLines[index] ?? "",
-        });
-      }
     }
   }
 
-  private getSearchVisibleNodeIds(): ReadonlySet<string> | undefined {
+  private getDetailRows(): DetailRow[] {
+    const turn = this.getSelectedTurn();
+    if (!turn) return [];
+
+    const rows: DetailRow[] = [];
+    for (const file of turn.files) {
+      rows.push({
+        id: file.id,
+        kind: "file",
+        selectable: false,
+        file,
+      });
+      for (const hunk of file.hunks) {
+        rows.push({
+          id: hunk.id,
+          kind: "hunk",
+          selectable: true,
+          file,
+          hunk,
+        });
+        for (let index = 0; index < hunk.bodyLines.length; index++) {
+          rows.push({
+            id: `${hunk.id}:line:${index}`,
+            kind: "diff",
+            selectable: true,
+            file,
+            hunk,
+            text: hunk.bodyLines[index] ?? "",
+          });
+        }
+      }
+    }
+    return rows;
+  }
+
+  private getSearchVisibleTurnIds(): ReadonlySet<string> | undefined {
     const tokens = this.searchQuery.toLowerCase().split(/\s+/u).filter(Boolean);
     if (tokens.length === 0) return undefined;
 
     const visible = new Set<string>();
-    for (const node of this.nodesById.values()) {
-      const searchableText = this.getSearchableText(node).toLowerCase();
+    for (const turn of this.turnsById.values()) {
+      const searchableText = this.getSearchableText(turn).toLowerCase();
       if (!tokens.every((token) => searchableText.includes(token))) continue;
-      this.addNodeAndAncestors(visible, node.id);
+      this.addTurnAndAncestors(visible, turn.id);
     }
     return visible;
   }
 
-  private addNodeAndAncestors(target: Set<string>, nodeId: string): void {
-    let currentId: string | undefined = nodeId;
+  private addTurnAndAncestors(target: Set<string>, turnId: string): void {
+    let currentId: string | undefined = turnId;
     while (currentId) {
       target.add(currentId);
       currentId = this.parentById.get(currentId);
     }
   }
 
-  private getSearchableText(node: ReviewNode): string {
-    if (node.type === "turn") {
-      return `${this.turnLabel(node.turn)} ${node.turn.prompt}`;
-    }
-    if (node.type === "file") {
-      return `${node.file.path} +${node.file.additions} -${node.file.removals}`;
-    }
-    return [
-      node.hunk.path,
-      node.hunk.header,
-      node.hunk.bodyLines.join("\n"),
-      String(node.hunk.jumpLine),
-    ].join(" ");
+  private getSearchableText(turn: ReviewTurn): string {
+    const fileText = turn.files
+      .map((file) =>
+        [
+          file.path,
+          `+${file.additions}`,
+          `-${file.removals}`,
+          file.hunks
+            .map((hunk) =>
+              [
+                hunk.path,
+                hunk.header,
+                String(hunk.jumpLine),
+                hunk.bodyLines.join("\n"),
+              ].join(" "),
+            )
+            .join(" "),
+        ].join(" "),
+      )
+      .join(" ");
+    return `${this.turnLabel(turn)} ${turn.prompt} ${fileText}`;
   }
 
-  private renderRow(row: RenderRow, width: number): string {
-    const selected = row.id === this.selectedId;
-    const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
-    const prefix = this.theme.fg("dim", this.prefixForRow(row));
-    const content =
-      row.kind === "diff"
-        ? this.renderDiffLine(row.text, row.node.hunk.path)
-        : this.renderNode(row.node, selected);
-    let line = cursor + prefix + content;
-    if (selected) line = this.theme.bg("selectedBg", line);
+  private renderTurnRow(row: TurnRow, width: number): string {
+    const selected = row.id === this.selectedTurnId;
+    const focused = selected && this.focus === "tree";
+    const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
+    const prefix = this.theme.fg("dim", row.prefix);
+    const marker = this.foldMarker(row.id);
+    const prompt = row.turn.prompt || "(empty prompt)";
+    const text = `${marker}${this.theme.fg("accent", "user: ")}${this.theme.fg("text", prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
+    let line = cursor + prefix + (selected ? this.theme.bold(text) : text);
+    if (focused) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width);
   }
 
-  private prefixForRow(row: RenderRow): string {
-    return row.prefix;
-  }
-
-  private renderNode(node: ReviewNode, selected: boolean): string {
-    const marker = this.foldMarker(node.id);
-    let text: string;
-    if (node.type === "turn") {
-      const prompt = node.turn.prompt || "(empty prompt)";
-      text = `${this.theme.fg("accent", "user: ")}${this.theme.fg("text", prompt)} ${this.statText(node.turn)}`;
-    } else if (node.type === "file") {
-      text = `${this.theme.fg("toolTitle", node.file.path)} ${this.statText(node.file)} ${this.theme.fg("muted", `${node.file.hunks.length} hunk${node.file.hunks.length === 1 ? "" : "s"}`)}`;
+  private renderDetailRow(row: DetailRow, width: number): string {
+    const selected = row.selectable && row.id === this.selectedDetailId;
+    const focused = selected && this.focus === "details";
+    const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
+    let content: string;
+    if (row.kind === "file") {
+      content = `  ${this.theme.fg("toolTitle", row.file.path)} ${this.statText(row.file)} ${this.theme.fg("muted", `${row.file.hunks.length} hunk${row.file.hunks.length === 1 ? "" : "s"}`)}`;
+    } else if (row.kind === "hunk") {
+      content = `    ${this.theme.fg("borderAccent", row.hunk.header)} ${this.theme.fg("dim", row.hunk.path)}`;
     } else {
-      text = `${this.theme.fg("borderAccent", node.hunk.header)} ${this.theme.fg("dim", node.hunk.path)}`;
+      content = `      ${this.renderDiffLine(row.text, row.hunk.path)}`;
     }
-    return `${marker}${selected ? this.theme.bold(text) : text}`;
+
+    let line = cursor + content;
+    if (focused) line = this.theme.bg("selectedBg", line);
+    return truncateToWidth(line, width);
   }
 
   private renderDiffLine(line: string, filePath: string): string {
@@ -583,116 +633,229 @@ export class DiffReviewComponent implements Component {
       : this.theme.fg("accent", "⊟ ");
   }
 
-  private moveSelection(delta: number): void {
-    const selectable = this.getRows().filter(isSelectableRow);
+  private moveFocusedSelection(delta: number): void {
+    if (this.focus === "details") {
+      this.moveDetailSelection(delta);
+    } else {
+      this.moveTurnSelection(delta);
+    }
+  }
+
+  private pageFocusedSelection(direction: -1 | 1): void {
+    if (this.focus === "details") {
+      this.moveDetailSelection(
+        direction * Math.max(1, this.lastDetailsPageSize),
+      );
+    } else {
+      this.moveTurnSelection(direction * Math.max(1, this.lastTreePageSize));
+    }
+  }
+
+  private moveTurnSelection(delta: number): void {
+    const rows = this.getTreeRows();
+    if (rows.length === 0) return;
+    const currentIndex = Math.max(
+      0,
+      rows.findIndex((row) => row.id === this.selectedTurnId),
+    );
+    const nextIndex = clamp(currentIndex + delta, 0, rows.length - 1);
+    this.selectTurn(rows[nextIndex]?.id);
+  }
+
+  private moveDetailSelection(delta: number): void {
+    const selectable = this.getDetailRows().filter(isSelectableDetailRow);
     if (selectable.length === 0) return;
     const currentIndex = Math.max(
       0,
-      selectable.findIndex((row) => row.id === this.selectedId),
+      selectable.findIndex((row) => row.id === this.selectedDetailId),
     );
     const nextIndex = clamp(currentIndex + delta, 0, selectable.length - 1);
-    this.selectedId = selectable[nextIndex]?.id;
+    this.selectedDetailId = selectable[nextIndex]?.id;
   }
 
   private moveToHunk(delta: number): void {
-    const hunks = this.getRows().filter(isHunkRow);
+    const hunks = this.getDetailRows().filter(isHunkDetailRow);
     if (hunks.length === 0) return;
-    const selectedNode = this.getSelectedNode();
-    const selectedHunkId =
-      selectedNode?.type === "hunk" ? selectedNode.id : this.selectedId;
-    const currentIndex = hunks.findIndex((row) => row.id === selectedHunkId);
+    const selectedHunkId = this.findHunkForDetailRow(
+      this.getSelectedDetailRow(),
+    )?.id;
+    const currentIndex = hunks.findIndex(
+      (row) => row.hunk.id === selectedHunkId,
+    );
     const nextIndex =
       currentIndex === -1
         ? delta > 0
           ? 0
           : hunks.length - 1
         : clamp(currentIndex + delta, 0, hunks.length - 1);
-    this.selectedId = hunks[nextIndex]?.id;
+    this.selectedDetailId = hunks[nextIndex]?.id;
   }
 
-  private selectFirst(): void {
-    const first = this.getRows().find(isSelectableRow);
-    this.selectedId = first?.id;
-  }
-
-  private selectLast(): void {
-    const selectable = this.getRows().filter(isSelectableRow);
-    this.selectedId = selectable[selectable.length - 1]?.id;
-  }
-
-  private toggleSelected(): void {
-    const node = this.getSelectedNode();
-    if (!node || !this.foldableIds.has(node.id)) return;
-    this.selectedId = node.id;
-    if (this.foldedIds.has(node.id)) {
-      this.foldedIds.delete(node.id);
+  private selectFocusedFirst(): void {
+    if (this.focus === "details") {
+      const first = this.getDetailRows().find(isSelectableDetailRow);
+      this.selectedDetailId = first?.id;
     } else {
-      this.foldedIds.add(node.id);
+      this.selectTurn(this.getTreeRows()[0]?.id);
     }
-    this.invalidateRows();
+  }
+
+  private selectFocusedLast(): void {
+    if (this.focus === "details") {
+      const selectable = this.getDetailRows().filter(isSelectableDetailRow);
+      this.selectedDetailId = selectable[selectable.length - 1]?.id;
+    } else {
+      const rows = this.getTreeRows();
+      this.selectTurn(rows[rows.length - 1]?.id);
+    }
+  }
+
+  private toggleSelectedTurn(): void {
+    const turn = this.getSelectedTurn();
+    if (!turn || !this.foldableIds.has(turn.id)) return;
+    if (this.foldedIds.has(turn.id)) {
+      this.foldedIds.delete(turn.id);
+    } else {
+      this.foldedIds.add(turn.id);
+    }
+    this.invalidateTreeRows();
   }
 
   private collapseOrMoveParent(): void {
-    const node = this.getSelectedNode();
-    if (!node) return;
+    const turn = this.getSelectedTurn();
+    if (!turn) return;
 
-    if (this.selectedId !== node.id) {
-      this.selectedId = node.id;
+    if (this.foldableIds.has(turn.id) && !this.foldedIds.has(turn.id)) {
+      this.foldedIds.add(turn.id);
+      this.invalidateTreeRows();
       return;
     }
-
-    if (this.foldableIds.has(node.id) && !this.foldedIds.has(node.id)) {
-      this.foldedIds.add(node.id);
-      this.invalidateRows();
-      return;
-    }
-    const parentId = this.parentById.get(node.id);
-    if (parentId) this.selectedId = parentId;
+    const parentId = this.parentById.get(turn.id);
+    if (parentId) this.selectTurn(parentId);
   }
 
   private expandOrMoveChild(): void {
-    const node = this.getSelectedNode();
-    if (!node) return;
-    this.selectedId = node.id;
-    if (this.foldableIds.has(node.id) && this.foldedIds.has(node.id)) {
-      this.foldedIds.delete(node.id);
-      this.invalidateRows();
+    const turn = this.getSelectedTurn();
+    if (!turn) return;
+    if (this.foldableIds.has(turn.id) && this.foldedIds.has(turn.id)) {
+      this.foldedIds.delete(turn.id);
+      this.invalidateTreeRows();
       return;
     }
-    const childId = this.childrenById.get(node.id)?.[0];
-    if (childId) this.selectedId = childId;
+    const childId = this.childrenById.get(turn.id)?.[0];
+    if (childId) this.selectTurn(childId);
   }
 
-  private collapseAllDiffs(): void {
+  private collapseAllBranches(): void {
     this.foldedIds.clear();
-    for (const [id, node] of this.nodesById) {
-      if (node.type !== "turn") this.foldedIds.add(id);
+    for (const id of this.foldableIds) {
+      this.foldedIds.add(id);
     }
-    this.invalidateRows();
+    this.invalidateTreeRows();
   }
 
-  private expandAll(): void {
+  private expandAllBranches(): void {
     this.foldedIds.clear();
-    this.invalidateRows();
+    this.invalidateTreeRows();
   }
 
-  private getSelectedNode(): ReviewNode | undefined {
-    return this.getSelectedRow()?.node;
+  private toggleFocus(): void {
+    this.focus = this.focus === "tree" ? "details" : "tree";
+    if (this.focus === "details") {
+      this.ensureDetailSelection(this.getDetailRows());
+    }
   }
 
-  private getSelectedRow(): RenderRow | undefined {
-    if (!this.selectedId) return undefined;
-    return this.getRows().find((row) => row.id === this.selectedId);
+  private selectTurn(id: string | undefined): void {
+    if (id === this.selectedTurnId) return;
+    this.selectedTurnId = id;
+    this.selectedDetailId = undefined;
+    this.detailScrollOffset = 0;
   }
 
-  private findHunkForNode(
-    node: ReviewNode | undefined,
+  private ensureDetailSelection(rows: readonly DetailRow[]): void {
+    if (
+      rows.some((row) => row.selectable && row.id === this.selectedDetailId)
+    ) {
+      return;
+    }
+    this.selectedDetailId = rows.find(isSelectableDetailRow)?.id;
+    this.detailScrollOffset = 0;
+  }
+
+  private ensureDetailScroll(
+    rows: readonly DetailRow[],
+    viewportHeight: number,
+  ): void {
+    this.detailScrollOffset = clamp(
+      this.detailScrollOffset,
+      0,
+      Math.max(0, rows.length - viewportHeight),
+    );
+    const selectedIndex = rows.findIndex(
+      (row) => row.id === this.selectedDetailId,
+    );
+    if (selectedIndex < 0) return;
+    if (selectedIndex < this.detailScrollOffset) {
+      this.detailScrollOffset = selectedIndex;
+    } else if (selectedIndex >= this.detailScrollOffset + viewportHeight) {
+      this.detailScrollOffset = selectedIndex - viewportHeight + 1;
+    }
+  }
+
+  private calculateSelectedWindowStart(
+    rows: readonly TurnRow[],
+    selectedId: string | undefined,
+    viewportHeight: number,
+  ): number {
+    if (viewportHeight <= 0) return 0;
+    const selectedIndex = Math.max(
+      0,
+      rows.findIndex((row) => row.id === selectedId),
+    );
+    return Math.max(
+      0,
+      Math.min(
+        selectedIndex - Math.floor(viewportHeight / 2),
+        rows.length - viewportHeight,
+      ),
+    );
+  }
+
+  private getSelectedTurn(): ReviewTurn | undefined {
+    if (!this.selectedTurnId) return undefined;
+    return this.turnsById.get(this.selectedTurnId);
+  }
+
+  private getSelectedDetailRow(): SelectableDetailRow | undefined {
+    if (!this.selectedDetailId) return undefined;
+    return this.getDetailRows().find(
+      (row): row is SelectableDetailRow =>
+        row.selectable && row.id === this.selectedDetailId,
+    );
+  }
+
+  private findHunkForDetailRow(
+    row: SelectableDetailRow | undefined,
   ): ReviewHunk | undefined {
-    return node?.type === "hunk" ? node.hunk : undefined;
+    if (!row) return undefined;
+    return row.hunk;
+  }
+
+  private firstHunk(turn: ReviewTurn | undefined): ReviewHunk | undefined {
+    if (!turn) return undefined;
+    for (const file of turn.files) {
+      const hunk = file.hunks[0];
+      if (hunk) return hunk;
+    }
+    return undefined;
   }
 
   private openSelectedHunk(): void {
-    const hunk = this.findHunkForNode(this.getSelectedNode());
+    const turn = this.getSelectedTurn();
+    const hunk =
+      this.findHunkForDetailRow(this.getSelectedDetailRow()) ??
+      this.firstHunk(turn);
     if (!hunk) {
       this.notice = "Select a diff hunk to open an exact region.";
       return;
@@ -712,29 +875,52 @@ export class DiffReviewComponent implements Component {
     );
   }
 
+  private statusText(): string {
+    const treeRows = this.getTreeRows();
+    const treePosition = Math.max(
+      0,
+      treeRows.findIndex((row) => row.id === this.selectedTurnId) + 1,
+    );
+    const detailRows = this.getDetailRows().filter(isSelectableDetailRow);
+    const detailPosition = Math.max(
+      0,
+      detailRows.findIndex((row) => row.id === this.selectedDetailId) + 1,
+    );
+    const turn = this.getSelectedTurn();
+    if (!turn) return "  (0/0)";
+    return `  tree ${treePosition}/${treeRows.length} • diff ${detailPosition}/${detailRows.length} • ${this.describeTurn(turn)}`;
+  }
+
   private statText(stats: { additions: number; removals: number }): string {
     return `${this.theme.fg("toolDiffAdded", `+${stats.additions}`)} ${this.theme.fg("toolDiffRemoved", `-${stats.removals}`)}`;
   }
 
-  private turnLabel(turn: ReviewTurn): string {
-    return `Turn ${turn.ordinal}`;
+  private fileHunkText(turn: ReviewTurn): string {
+    const hunkCount = turn.files.reduce(
+      (total, file) => total + file.hunks.length,
+      0,
+    );
+    return this.theme.fg(
+      "muted",
+      `${turn.files.length} file${turn.files.length === 1 ? "" : "s"} ${hunkCount} hunk${hunkCount === 1 ? "" : "s"}`,
+    );
   }
 
-  private describeNode(node: ReviewNode): string {
-    if (node.type === "turn")
-      return `${this.turnLabel(node.turn)} • u to undo to this turn`;
-    if (node.type === "file")
-      return `${node.file.path} • ${node.file.hunks.length} hunk${node.file.hunks.length === 1 ? "" : "s"}`;
-    return `${node.hunk.path}:${node.hunk.jumpLine} • ${keyText("app.editor.external")} opens here`;
+  private turnLabel(turn: ReviewTurn): string {
+    return `user: ${turn.prompt || "(empty prompt)"}`;
+  }
+
+  private describeTurn(turn: ReviewTurn): string {
+    return `${this.turnLabel(turn)} • u to undo to this turn`;
   }
 }
 
-function isSelectableRow(row: RenderRow): row is SelectableRow {
+function isSelectableDetailRow(row: DetailRow): row is SelectableDetailRow {
   return row.selectable;
 }
 
-function isHunkRow(row: RenderRow): row is SelectableRow & { node: HunkNode } {
-  return row.selectable && row.node.type === "hunk";
+function isHunkDetailRow(row: DetailRow): row is HunkDetailRow {
+  return row.kind === "hunk";
 }
 
 function isPrintableInput(data: string): boolean {

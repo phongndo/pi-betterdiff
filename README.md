@@ -2,7 +2,7 @@
 
 A [pi](https://pi.dev) extension package focused on better session-diff ergonomics.
 
-The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations in the current session branch.
+The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations across the current pi session tree.
 
 ## What is included
 
@@ -12,7 +12,8 @@ The extension now includes an initial `/diff` UI prototype for reviewing agent-p
 - **Vitest** test suite with coverage support
 - GitHub Actions for CI and release packaging
 - `/diff` command that opens a tree-inspired session diff navigator
-- turn/file/hunk hierarchy with fold/expand controls
+- branch-aware tree of diff-producing user turns with fold/expand controls
+- selected-turn detail pane for changed files, hunks, and syntax-highlighted diff lines
 - turn-level rewind via pi tree navigation
 - `ctrl+g` external-editor handoff for the selected diff hunk
 
@@ -81,4 +82,4 @@ It re-validates the package, creates a tarball with `npm pack`, uploads it as a 
 
 ## Next steps
 
-Next work should deepen the prototype: richer write/overwrite diffs, full session-tree branch coverage, better tests for renderer output, and more editor adapters.
+Next work should deepen the prototype: richer write/overwrite diffs, better tests for renderer output, and more editor adapters.

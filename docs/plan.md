@@ -24,7 +24,8 @@ The intended UX is documented in [docs/diff-review-spec.md](diff-review-spec.md)
 Highlights from the current direction:
 
 - primary command: `/diff`
-- tree-inspired diff navigator with foldable files and hunks
+- tree-inspired navigator where children represent pi session continuation/branch relationships between diff-producing user turns
+- selected-turn detail pane for files, hunks, and diff body scrolling
 - vim-style keyboard navigation
 - `ctrl+g` opens the selected diff region in `nvim` / `$VISUAL` / `$EDITOR`
 - returning from the editor should restore the diff UI state
@@ -34,8 +35,8 @@ Highlights from the current direction:
 ### Current files
 
 - `src/index.ts` — pi extension entrypoint registering `/diff`.
-- `src/diff/model.ts` — current-branch session mutation normalizer for `edit` and `write` tool results.
-- `src/render/diff-review-ui.ts` — custom TUI component for turn/file/hunk navigation.
+- `src/diff/model.ts` — session-tree mutation normalizer for `edit` and `write` tool results.
+- `src/render/diff-review-ui.ts` — custom TUI component for branch-aware turn navigation plus selected-turn diff details.
 - `src/config/` — empty placeholder for future configuration modules.
 - `src/runtime/` — placeholder for future runtime orchestration as behavior grows.
 - `test/` — Vitest coverage for extension registration and diff model normalization.
@@ -110,8 +111,7 @@ Once the extension has mature functionality and package metadata is finalized, t
 
 1. Improve write/overwrite handling by reconstructing before/after content where possible.
 2. Add golden tests for representative renderer output and hunk parsing.
-3. Add fuller session-tree support beyond the current active branch.
-4. Harden external-editor adapter handling and add more editor-specific targeting.
-5. Add integration-style tests around representative `edit`/`write` output and navigation state restoration.
-6. Add user-facing configuration for keymap, verbosity, and fallback editor behavior.
-7. Remove `private: true` and enable npm publishing when the package is ready.
+3. Harden external-editor adapter handling and add more editor-specific targeting.
+4. Add integration-style tests around representative `edit`/`write` output and navigation state restoration.
+5. Add user-facing configuration for keymap, verbosity, and fallback editor behavior.
+6. Remove `private: true` and enable npm publishing when the package is ready.

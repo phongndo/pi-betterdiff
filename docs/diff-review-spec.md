@@ -5,7 +5,7 @@ An initial `/diff` UI prototype now exists; this spec still describes the broade
 
 ## Primary goal
 
-Provide a dedicated, navigable diff-review experience for **agent-produced file mutations in the current pi session**.
+Provide a dedicated, navigable diff-review experience for **agent-produced file mutations across the current pi session tree**.
 
 This should feel spiritually similar to pi's `/tree` navigator, but focused only on file changes and diff hunks.
 
@@ -31,67 +31,55 @@ The UI should take strong inspiration from pi's `/tree` experience:
 - optimized for fast scanning and review
 - lightweight enough to reopen frequently during a coding session
 
-Unlike `/tree`, the content model is based on **diffs**, not conversation entries.
+Like `/tree`, child/sibling relationships should represent the pi session tree. Unlike `/tree`, the visible nodes are filtered to **diff-producing user turns**; changed files and hunks are detail content for the selected turn, not tree children.
 
 ## Information hierarchy
 
 The default hierarchy should be:
 
-1. **file**
-2. **diff region / hunk**
-3. optional inline changed lines / patch body when expanded
+1. **diff-producing user turn tree**
+2. **selected-turn file details**
+3. **selected-turn diff region / hunk details**
+4. syntax-highlighted changed lines / patch body in the detail pane
 
-### File node
+A BetterDiff tree child is created by pi session ancestry: a later diff-producing user turn descends from an earlier diff-producing user turn, with non-diff turns compressed out. If the user rewinds/forks a previous turn, the alternate continuations appear as sibling branches.
 
-A file node represents one changed file across the current session review scope.
+Files, hunks, and diff body lines should **not** create tree children. They are details attached to the selected diff-producing user turn.
+
+### Turn node
+
+A turn node represents one user prompt whose assistant response produced one or more `edit`/`write` mutations.
 
 Suggested header content:
 
-- relative path
-- change summary
+- prompt preview
+- changed file count
 - hunk count
-- optional cumulative line stats (`+N -M`)
+- cumulative line stats (`+N -M`)
 
 Example:
 
 ```text
-⊞ src/render/diff-view.ts  (+24 -8)  3 hunks
+⊟ user: Refactor calculator parsing...  +24 -8  3 files  4 hunks
 ```
 
-### Hunk node
+### Detail pane
 
-A hunk node represents a concrete changed region.
-
-Suggested header content:
-
-- file-relative region label
-- new-file line anchor
-- optional old/new line range
-- small change stats or preview
+The selected turn's detail pane shows changed files and concrete hunks. Hunk rows and diff body lines can be selected/scrolled for review and for `ctrl+g` editor jumping.
 
 Example:
 
 ```text
-  ⊟ lines 120-148  @@ -118,9 +120,28 @@  (+18 -3)
+src/render/diff-view.ts  (+24 -8)  3 hunks
+  lines 120-148  edit  (+18 -3)
+    +121 const next = parse(input);
 ```
-
-When expanded, the hunk should reveal the diff body inline.
 
 ## Rendering behavior
 
 ### Folding
 
-Users should be able to keep both levels either collapsed or expanded:
-
-- files can be collapsed or expanded
-- hunks can be collapsed or expanded
-
-The initial default should favor scanability:
-
-- files visible
-- hunks visible under selected file, or all hunks collapsed by default
-
-This can be finalized during implementation.
+Users should be able to collapse or expand branch nodes in the diff-producing turn tree. File and hunk data lives in the selected-turn detail pane rather than in the tree itself.
 
 ### Headers and line indicators
 
@@ -128,7 +116,7 @@ The navigator should support vim-like motions by default.
 ### Nice-to-have motions
 
 - `[` / `]` — previous / next hunk
-- `/` — search by file path or diff text
+- `/` or type-to-search — search by prompt, file path, or diff text
 - `n` / `N` — next / previous search result
 - `zc` / `zo` / `za` style fold helpers if they fit naturally
 
@@ -186,7 +174,7 @@ That return flow is a core part of the UX, not an optional enhancement.
 
 ## Data source
 
-The review browser is based on **pi session mutation history**, not the git working tree.
+The review browser is based on **pi session mutation history**, not the git working tree. Its default scope is the current session tree, including branch/fork siblings that are present in pi's session data.
 
 Primary mutation sources:
 
@@ -197,8 +185,16 @@ The extension should normalize these into a single internal review model.
 
 ## Suggested internal review model
 
-A future implementation should likely normalize data into something like:
+The current implementation normalizes data into:
 
+- review model
+  - flat diff-producing turns for traversal/status
+  - root diff-producing turns for tree rendering
+- review turn
+  - originating user entry id
+  - prompt preview
+  - branch children based on compressed pi session ancestry
+  - changed files[]
 - review file
   - path
   - cumulative stats
@@ -207,12 +203,10 @@ A future implementation should likely normalize data into something like:
   - stable id
   - originating session entry id
   - tool name
-  - timestamp / turn index
-  - old range
-  - new range
+  - old/new range where available
   - display header
-  - patch text
-  - primary jump line / column
+  - patch body
+  - primary jump line
 
 ## Scope preference
 
@@ -236,14 +230,14 @@ The default mental model is:
 Implemented in the first UI pass:
 
 - `/diff` command
-- current-branch turn/file/hunk hierarchy
-- fold/expand navigation
+- branch-aware diff-producing turn tree
+- selected-turn details for files, hunks, and diff body lines
+- fold/expand navigation for tree branches
 - turn rewind via `ctx.navigateTree()`
 - `ctrl+g` external-editor jump to the selected hunk line
 
 Still to harden:
 
-- complete branch-aware history, not only the active branch
 - richer before/after reconstruction for `write` overwrites
 - more exact hunk metadata and editor targeting
 - renderer golden tests and broader integration coverage

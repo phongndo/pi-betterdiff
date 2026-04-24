@@ -40,12 +40,21 @@ export interface ReviewTurn extends DiffStats {
   timestamp: string;
   prompt: string;
   files: ReviewFile[];
+  children: ReviewTurn[];
 }
 
 export interface ReviewModel extends DiffStats {
+  /** All diff-producing user turns in traversal order. */
   turns: ReviewTurn[];
+  /** Diff-producing user turns arranged by compressed pi session-tree ancestry. */
+  roots: ReviewTurn[];
   totalFiles: number;
   totalHunks: number;
+}
+
+export interface ReviewSessionTreeNode {
+  entry: SessionEntry;
+  children: ReviewSessionTreeNode[];
 }
 
 interface ToolCallInfo {
@@ -54,7 +63,15 @@ interface ToolCallInfo {
   args: Record<string, unknown>;
 }
 
-interface MutableReviewTurn extends ReviewTurn {
+interface MutableReviewTurn extends DiffStats {
+  id: string;
+  ordinal: number;
+  userEntryId: string;
+  parentEntryId: string | null;
+  timestamp: string;
+  prompt: string;
+  files: ReviewFile[];
+  children: MutableReviewTurn[];
   fileByPath: Map<string, ReviewFile>;
 }
 
@@ -68,19 +85,30 @@ const MAX_WRITE_PREVIEW_LINES = 80;
 export function buildReviewModel(
   entries: readonly SessionEntry[],
 ): ReviewModel {
+  return buildReviewModelFromEntries(entries);
+}
+
+export function buildReviewModelFromTree(
+  tree: readonly ReviewSessionTreeNode[],
+): ReviewModel {
+  return buildReviewModelFromEntries(flattenSessionTree(tree));
+}
+
+function buildReviewModelFromEntries(
+  entries: readonly SessionEntry[],
+): ReviewModel {
+  const byId = new Map<string, SessionEntry>();
   const toolCalls = new Map<string, ToolCallInfo>();
-  const turns: MutableReviewTurn[] = [];
-  let currentTurn: MutableReviewTurn | undefined;
+  const turnByUserEntryId = new Map<string, MutableReviewTurn>();
   let userMessageCount = 0;
-  let syntheticTurnCount = 0;
 
   for (const entry of entries) {
+    byId.set(entry.id, entry);
     if (entry.type !== "message") continue;
 
     if (entry.message.role === "user") {
       userMessageCount += 1;
-      currentTurn = createTurn(entry, userMessageCount);
-      turns.push(currentTurn);
+      turnByUserEntryId.set(entry.id, createTurn(entry, userMessageCount));
       continue;
     }
 
@@ -88,19 +116,14 @@ export function buildReviewModel(
       for (const toolCall of extractToolCalls(entry.message.content)) {
         toolCalls.set(toolCall.id, toolCall);
       }
-      continue;
     }
+  }
 
-    if (entry.message.role !== "toolResult") continue;
-    if (entry.message.isError) continue;
-    if (entry.message.toolName !== "edit" && entry.message.toolName !== "write")
-      continue;
+  for (const entry of entries) {
+    if (!isMutationToolResultEntry(entry)) continue;
 
-    if (!currentTurn) {
-      syntheticTurnCount += 1;
-      currentTurn = createSyntheticTurn(entry, syntheticTurnCount);
-      turns.push(currentTurn);
-    }
+    const turn = findNearestUserTurn(entry, byId, turnByUserEntryId);
+    if (!turn) continue;
 
     const toolCall = toolCalls.get(entry.message.toolCallId);
     const args = toolCall?.name === entry.message.toolName ? toolCall.args : {};
@@ -109,12 +132,12 @@ export function buildReviewModel(
 
     const hunks =
       entry.message.toolName === "edit"
-        ? hunksFromEdit(entry, currentTurn.id, path)
-        : hunksFromWrite(entry, currentTurn.id, path, args);
+        ? hunksFromEdit(entry, turn.id, path)
+        : hunksFromWrite(entry, turn.id, path, args);
 
     if (hunks.length === 0) continue;
 
-    const file = getOrCreateFile(currentTurn, path);
+    const file = getOrCreateFile(turn, path);
     for (const hunk of hunks) {
       const finalizedHunk: ReviewHunk = {
         ...hunk,
@@ -122,32 +145,172 @@ export function buildReviewModel(
       };
       file.hunks.push(finalizedHunk);
       addStats(file, finalizedHunk);
-      addStats(currentTurn, finalizedHunk);
+      addStats(turn, finalizedHunk);
     }
   }
 
-  const visibleTurns = turns.filter((turn) => turn.files.length > 0);
-  const allPaths = new Set<string>();
-  let totalHunks = 0;
-  let additions = 0;
-  let removals = 0;
-
-  for (const turn of visibleTurns) {
-    for (const file of turn.files) {
-      allPaths.add(file.path);
-      totalHunks += file.hunks.length;
-    }
-    additions += turn.additions;
-    removals += turn.removals;
-  }
+  const visibleTurns = [...turnByUserEntryId.values()].filter(
+    (turn) => turn.files.length > 0,
+  );
+  const roots = connectDiffTurnTree(visibleTurns, byId);
+  const { turns, roots: immutableRoots } = stripMutableTurns(
+    visibleTurns,
+    roots,
+  );
 
   return {
-    turns: visibleTurns.map(stripMutableTurn),
-    totalFiles: allPaths.size,
-    totalHunks,
-    additions,
-    removals,
+    turns,
+    roots: immutableRoots,
+    totalFiles: countUniqueFiles(visibleTurns),
+    totalHunks: countHunks(visibleTurns),
+    additions: visibleTurns.reduce((total, turn) => total + turn.additions, 0),
+    removals: visibleTurns.reduce((total, turn) => total + turn.removals, 0),
   };
+}
+
+function flattenSessionTree(
+  tree: readonly ReviewSessionTreeNode[],
+): SessionEntry[] {
+  const entries: SessionEntry[] = [];
+  const stack = [...tree].reverse();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) continue;
+    entries.push(node.entry);
+    for (let index = node.children.length - 1; index >= 0; index--) {
+      const child = node.children[index];
+      if (child) stack.push(child);
+    }
+  }
+  return entries;
+}
+
+function isMutationToolResultEntry(
+  entry: SessionEntry,
+): entry is SessionMessageEntry & {
+  message: Extract<SessionMessageEntry["message"], { role: "toolResult" }> & {
+    toolName: "edit" | "write";
+  };
+} {
+  return (
+    entry.type === "message" &&
+    entry.message.role === "toolResult" &&
+    !entry.message.isError &&
+    (entry.message.toolName === "edit" || entry.message.toolName === "write")
+  );
+}
+
+function findNearestUserTurn(
+  entry: SessionEntry,
+  byId: ReadonlyMap<string, SessionEntry>,
+  turnByUserEntryId: ReadonlyMap<string, MutableReviewTurn>,
+): MutableReviewTurn | undefined {
+  let currentId = entry.parentId;
+  while (currentId) {
+    const current = byId.get(currentId);
+    if (!current) return undefined;
+    if (current.type === "message" && current.message.role === "user") {
+      const turn = turnByUserEntryId.get(current.id);
+      if (turn) return turn;
+    }
+    currentId = current.parentId;
+  }
+  return undefined;
+}
+
+function connectDiffTurnTree(
+  visibleTurns: readonly MutableReviewTurn[],
+  byId: ReadonlyMap<string, SessionEntry>,
+): MutableReviewTurn[] {
+  const visibleByUserEntryId = new Map(
+    visibleTurns.map((turn) => [turn.userEntryId, turn] as const),
+  );
+  const roots: MutableReviewTurn[] = [];
+
+  for (const turn of visibleTurns) {
+    turn.children = [];
+  }
+
+  for (const turn of visibleTurns) {
+    const parent = findNearestDiffAncestor(turn, visibleByUserEntryId, byId);
+    if (parent) {
+      parent.children.push(turn);
+    } else {
+      roots.push(turn);
+    }
+  }
+
+  return roots;
+}
+
+function findNearestDiffAncestor(
+  turn: MutableReviewTurn,
+  visibleByUserEntryId: ReadonlyMap<string, MutableReviewTurn>,
+  byId: ReadonlyMap<string, SessionEntry>,
+): MutableReviewTurn | undefined {
+  let currentId = turn.parentEntryId;
+  while (currentId) {
+    const current = byId.get(currentId);
+    if (!current) return undefined;
+    if (current.type === "message" && current.message.role === "user") {
+      const ancestor = visibleByUserEntryId.get(current.id);
+      if (ancestor) return ancestor;
+    }
+    currentId = current.parentId;
+  }
+  return undefined;
+}
+
+function stripMutableTurns(
+  visibleTurns: readonly MutableReviewTurn[],
+  roots: readonly MutableReviewTurn[],
+): { turns: ReviewTurn[]; roots: ReviewTurn[] } {
+  const cache = new Map<string, ReviewTurn>();
+  const strip = (turn: MutableReviewTurn): ReviewTurn => {
+    const cached = cache.get(turn.id);
+    if (cached) return cached;
+
+    const stripped: ReviewTurn = {
+      id: turn.id,
+      ordinal: turn.ordinal,
+      userEntryId: turn.userEntryId,
+      parentEntryId: turn.parentEntryId,
+      timestamp: turn.timestamp,
+      prompt: turn.prompt,
+      files: turn.files,
+      children: [],
+      additions: turn.additions,
+      removals: turn.removals,
+    };
+    cache.set(turn.id, stripped);
+    stripped.children = turn.children.map(strip);
+    return stripped;
+  };
+
+  return {
+    turns: visibleTurns.map(strip),
+    roots: roots.map(strip),
+  };
+}
+
+function countUniqueFiles(turns: readonly MutableReviewTurn[]): number {
+  const paths = new Set<string>();
+  for (const turn of turns) {
+    for (const file of turn.files) {
+      paths.add(file.path);
+    }
+  }
+  return paths.size;
+}
+
+function countHunks(turns: readonly MutableReviewTurn[]): number {
+  let count = 0;
+  for (const turn of turns) {
+    for (const file of turn.files) {
+      count += file.hunks.length;
+    }
+  }
+  return count;
 }
 
 function createTurn(
@@ -165,41 +328,10 @@ function createTurn(
       200,
     ),
     files: [],
+    children: [],
     fileByPath: new Map<string, ReviewFile>(),
     additions: 0,
     removals: 0,
-  };
-}
-
-function createSyntheticTurn(
-  entry: SessionMessageEntry,
-  ordinal: number,
-): MutableReviewTurn {
-  return {
-    id: `turn:synthetic:${entry.id}`,
-    ordinal,
-    userEntryId: entry.id,
-    parentEntryId: entry.parentId,
-    timestamp: entry.timestamp,
-    prompt: "Session mutations before a user turn could be identified",
-    files: [],
-    fileByPath: new Map<string, ReviewFile>(),
-    additions: 0,
-    removals: 0,
-  };
-}
-
-function stripMutableTurn(turn: MutableReviewTurn): ReviewTurn {
-  return {
-    id: turn.id,
-    ordinal: turn.ordinal,
-    userEntryId: turn.userEntryId,
-    parentEntryId: turn.parentEntryId,
-    timestamp: turn.timestamp,
-    prompt: turn.prompt,
-    files: turn.files,
-    additions: turn.additions,
-    removals: turn.removals,
   };
 }
 
