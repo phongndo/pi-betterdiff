@@ -1,6 +1,6 @@
 # TODOs
 
-Feature goals for future BetterDiff diff modes. This file tracks product/feature work only. Bug fixes, review findings, and cleanup issues belong in `ISSUES.md`.
+Feature goals for future BetterDiff diff modes and navigation/search capabilities. This file tracks product/feature work only. Bug fixes, review findings, and cleanup issues belong in `ISSUES.md`.
 
 ## Diff type goals
 
@@ -109,3 +109,43 @@ Feature goals for future BetterDiff diff modes. This file tracks product/feature
     - binary files
     - very large diffs
   - **Definition of done:** The user can tell exactly which refs are being compared and what comparison semantics are being used.
+
+## Search and grep goals
+
+- [ ] **Tree-style search inside BetterDiff**
+  - **User goal:** Quickly jump to a visible review item the same way users expect to search in pi's tree UI.
+  - **Primary command/use case:** Search across rendered BetterDiff tree labels without leaving the diff review UI.
+  - **Search target:** Tree rows, not raw file contents.
+    - turn prompt labels
+    - file paths
+    - hunk labels/ranges/source labels
+    - optionally visible diff body lines when hunks are expanded
+  - **Expected behavior:**
+    - search should move selection to matching rows
+    - repeated next/previous search should cycle through matches
+    - search should respect the current rendered tree shape so collapsed hidden rows do not produce confusing jumps unless the feature explicitly expands them
+    - selected row should remain obvious after a match
+  - **Relationship to grep:** This is for navigating tree rows by label. It is not a full content grep.
+  - **Definition of done:** A user can search the BetterDiff tree similarly to tree search and land on matching turns/files/hunks predictably.
+
+- [ ] **Scoped grep inside BetterDiff**
+  - **User goal:** Search actual diff content within the current review scope.
+  - **Primary command/use case:** Run a grep-style query from inside the diff review UI and jump through matching diff lines/hunks.
+  - **Scope rule:** Grep should use the tree nesting context the user is currently in.
+    - selected turn: grep only that turn's changed files/hunks
+    - selected file: grep only that file's hunks/diff lines
+    - selected hunk: grep only that hunk's diff body
+    - selected diff line: grep the containing hunk, unless the UI clearly offers a wider parent scope
+    - top-level/global context: grep the entire active BetterDiff comparison/model
+  - **Top-level behavior:** If the user invokes grep from the top-level review context, it should be global for the current diff mode, not the entire repository unless the current diff mode itself is repository-wide.
+  - **Expected match targets:**
+    - diff body text
+    - file paths
+    - hunk labels/ranges if useful
+    - optionally turn prompts for session turn mode
+  - **Expected result behavior:**
+    - show match count and current match position
+    - jump next/previous match
+    - expand parent rows as needed so the matched diff line is visible
+    - preserve enough state to return to the previous selection when grep closes if practical
+  - **Definition of done:** A user can grep within the current nested BetterDiff scope, and global grep only happens when invoked from top-level/global context.
