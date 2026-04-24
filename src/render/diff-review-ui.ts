@@ -534,7 +534,8 @@ export class DiffReviewComponent implements Component {
     const marker = this.foldMarker(node.id);
     let text: string;
     if (node.type === "turn") {
-      text = `${this.theme.fg("accent", this.turnLabel(node.turn))} ${this.theme.fg("muted", node.turn.prompt || "(empty prompt)")} ${this.statText(node.turn)}`;
+      const prompt = node.turn.prompt || "(empty prompt)";
+      text = `${this.theme.fg("accent", "user: ")}${this.theme.fg("text", prompt)} ${this.statText(node.turn)}`;
     } else if (node.type === "file") {
       text = `${this.theme.fg("toolTitle", node.file.path)} ${this.statText(node.file)} ${this.theme.fg("muted", `${node.file.hunks.length} hunk${node.file.hunks.length === 1 ? "" : "s"}`)}`;
     } else {

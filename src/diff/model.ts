@@ -162,7 +162,7 @@ function createTurn(
     timestamp: entry.timestamp,
     prompt: summarizeText(
       entry.message.role === "user" ? extractText(entry.message.content) : "",
-      120,
+      200,
     ),
     files: [],
     fileByPath: new Map<string, ReviewFile>(),
