@@ -8,6 +8,29 @@ export interface DiffStats {
   removals: number;
 }
 
+export type ReviewModeKind =
+  | "session-turns"
+  | "git-changes"
+  | "git-branch-main"
+  | "git-branch-selected";
+
+export interface ReviewModeInfo {
+  kind: ReviewModeKind;
+  label: string;
+  description?: string;
+  baseRef?: string;
+  emptyTitle: string;
+  emptyHint?: string;
+}
+
+export const SESSION_TURNS_REVIEW_MODE: ReviewModeInfo = {
+  kind: "session-turns",
+  label: "Session turns",
+  description: "pi session edit/write history by user turn",
+  emptyTitle: "No edit/write changes found in this session tree.",
+  emptyHint: "Make a file change with edit/write, then reopen /diff.",
+};
+
 export interface ReviewHunk extends DiffStats {
   id: string;
   turnId: string;
@@ -15,7 +38,7 @@ export interface ReviewHunk extends DiffStats {
   path: string;
   entryId: string;
   toolCallId: string;
-  toolName: "edit" | "write";
+  toolName: "edit" | "write" | "git";
   oldStart: number | undefined;
   oldLines: number | undefined;
   newStart: number | undefined;
@@ -43,6 +66,7 @@ export interface ReviewTurn extends DiffStats {
 }
 
 export interface ReviewModel extends DiffStats {
+  mode: ReviewModeInfo;
   /** All diff-producing user turns in traversal order. */
   turns: ReviewTurn[];
   /** Diff-producing user turns arranged by compressed pi session-tree ancestry. */
@@ -164,6 +188,7 @@ function buildReviewModelFromEntries(
   );
 
   return {
+    mode: SESSION_TURNS_REVIEW_MODE,
     turns,
     roots: immutableRoots,
     activeTurnIds,

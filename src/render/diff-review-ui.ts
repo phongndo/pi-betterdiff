@@ -19,9 +19,22 @@ import {
 import type {
   ReviewFile,
   ReviewHunk,
+  ReviewModeKind,
   ReviewModel,
   ReviewTurn,
 } from "../diff/model.js";
+
+export type DiffReviewLoadRequest =
+  | { kind: "session-turns" }
+  | { kind: "git-changes" }
+  | { kind: "git-branch-main" }
+  | { kind: "git-branch-selected"; baseRef: string };
+
+export type DiffReviewModelLoader = (
+  request: DiffReviewLoadRequest,
+) => Promise<ReviewModel>;
+
+export type DiffReviewBranchRefsLoader = () => Promise<string[]>;
 
 export interface DiffReviewSummaryRequest {
   title: string;
@@ -103,6 +116,41 @@ interface ActionMenuState {
   selectedIndex: number;
 }
 
+interface DiffModeChoice {
+  kind: ReviewModeKind;
+  label: string;
+  description: string;
+  request?: DiffReviewLoadRequest;
+  branchPicker?: boolean;
+}
+
+const DIFF_MODE_CHOICES: readonly DiffModeChoice[] = [
+  {
+    kind: "session-turns",
+    label: "Session turns",
+    description: "agent edit/write history by user turn",
+    request: { kind: "session-turns" },
+  },
+  {
+    kind: "git-changes",
+    label: "Git changes",
+    description: "staged above unstaged",
+    request: { kind: "git-changes" },
+  },
+  {
+    kind: "git-branch-main",
+    label: "Current branch vs main/master",
+    description: "PR-style merge-base diff against the default branch",
+    request: { kind: "git-branch-main" },
+  },
+  {
+    kind: "git-branch-selected",
+    label: "Current branch vs selected branch…",
+    description: "pick a branch/ref as the PR-style base",
+    branchPicker: true,
+  },
+];
+
 export class DiffReviewComponent implements Component {
   private readonly turnsById = new Map<string, ReviewTurn>();
   private readonly parentById = new Map<string, string | undefined>();
@@ -122,15 +170,19 @@ export class DiffReviewComponent implements Component {
   private pendingBracket: "[" | "]" | undefined;
   private pendingBracketTimer: ReturnType<typeof setTimeout> | undefined;
   private notice: string | undefined;
+  private loadingMessage: string | undefined;
+  private loadRequestId = 0;
   private actionMenu: ActionMenuState | undefined;
 
   constructor(
-    private readonly model: ReviewModel,
+    private model: ReviewModel,
     private readonly cwd: string,
     private readonly tui: TUI,
     private readonly theme: Theme,
     private readonly keybindings: KeybindingsManager,
     private readonly done: (result: DiffReviewAction) => void,
+    private readonly modelLoader?: DiffReviewModelLoader,
+    private readonly branchRefsLoader?: DiffReviewBranchRefsLoader,
   ) {
     this.indexModel();
     this.foldDetailHunksByDefault();
@@ -153,19 +205,35 @@ export class DiffReviewComponent implements Component {
     lines.push(...border.render(width));
     lines.push(
       truncateToWidth(
-        `  ${this.theme.bold("Better Diff")} ${this.summaryText()}`,
+        `  ${this.theme.bold(`Better Diff — ${this.model.mode.label}`)} ${this.summaryText()}`,
         width,
       ),
     );
+    if (this.model.mode.description) {
+      lines.push(
+        truncateToWidth(
+          this.theme.fg("muted", `  ${this.model.mode.description}`),
+          width,
+        ),
+      );
+    }
     lines.push(
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. m: mode. r: refresh. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
     );
+    if (this.loadingMessage) {
+      lines.push(
+        truncateToWidth(
+          `  ${this.theme.fg("muted", this.loadingMessage)}`,
+          width,
+        ),
+      );
+    }
     if (this.notice) {
       lines.push(
         truncateToWidth(`  ${this.theme.fg("warning", this.notice)}`, width),
@@ -178,22 +246,18 @@ export class DiffReviewComponent implements Component {
     if (this.model.turns.length === 0) {
       lines.push(
         truncateToWidth(
-          this.theme.fg(
-            "muted",
-            "  No edit/write changes found in this session tree.",
-          ),
+          this.theme.fg("muted", `  ${this.model.mode.emptyTitle}`),
           width,
         ),
       );
-      lines.push(
-        truncateToWidth(
-          this.theme.fg(
-            "muted",
-            "  Make a file change with edit/write, then reopen /diff.",
+      if (this.model.mode.emptyHint) {
+        lines.push(
+          truncateToWidth(
+            this.theme.fg("muted", `  ${this.model.mode.emptyHint}`),
+            width,
           ),
-          width,
-        ),
-      );
+        );
+      }
       lines.push("");
       lines.push(...border.render(width));
       return lines;
@@ -233,7 +297,11 @@ export class DiffReviewComponent implements Component {
 
   private getBodyBudgetLines(width: number): number {
     const reservedLines =
-      9 + (this.notice ? 1 : 0) + this.getActionMenuLineCount(width);
+      9 +
+      (this.model.mode.description ? 1 : 0) +
+      (this.loadingMessage ? 1 : 0) +
+      (this.notice ? 1 : 0) +
+      this.getActionMenuLineCount(width);
     return Math.max(5, this.tui.terminal.rows - reservedLines);
   }
 
@@ -388,6 +456,18 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
+    if (data === "m" || data === "M") {
+      this.openModeMenu();
+      this.tui.requestRender();
+      return;
+    }
+
+    if (data === "r" || data === "R") {
+      this.refreshCurrentMode();
+      this.tui.requestRender();
+      return;
+    }
+
     if (this.matchesSelectUp(data) || data === "k") {
       this.moveSelection(-1);
     } else if (this.matchesSelectDown(data) || data === "j") {
@@ -506,6 +586,160 @@ export class DiffReviewComponent implements Component {
       items,
       selectedIndex: 0,
     };
+  }
+
+  private openModeMenu(): void {
+    const items = DIFF_MODE_CHOICES.map((choice): ActionMenuItem => {
+      const current = choice.kind === this.model.mode.kind;
+      return {
+        id: `mode-${choice.kind}`,
+        label: `${current ? "✓ " : "  "}${choice.label}`,
+        description: choice.description,
+        run: () => {
+          if (choice.branchPicker) {
+            this.openBranchRefMenu();
+            return;
+          }
+          if (current || !choice.request) return;
+          this.switchMode(choice.request);
+        },
+      };
+    });
+    const selectedIndex = Math.max(
+      0,
+      DIFF_MODE_CHOICES.findIndex(
+        (choice) => choice.kind === this.model.mode.kind,
+      ),
+    );
+
+    this.actionMenu = {
+      title: "diff mode",
+      prompt: `Current mode: ${this.model.mode.label}`,
+      items,
+      selectedIndex,
+    };
+  }
+
+  private refreshCurrentMode(): void {
+    const request = this.currentLoadRequest();
+    if (!request) return;
+    this.switchMode(request);
+  }
+
+  private currentLoadRequest(): DiffReviewLoadRequest | undefined {
+    if (this.model.mode.kind === "git-branch-selected") {
+      const baseRef = this.model.mode.baseRef;
+      if (!baseRef) {
+        this.openBranchRefMenu();
+        return undefined;
+      }
+      return { kind: "git-branch-selected", baseRef };
+    }
+    return { kind: this.model.mode.kind };
+  }
+
+  private openBranchRefMenu(): void {
+    if (!this.branchRefsLoader) {
+      this.notice = "Branch selection is unavailable in this context.";
+      return;
+    }
+
+    const requestId = this.loadRequestId + 1;
+    this.loadRequestId = requestId;
+    this.actionMenu = undefined;
+    this.loadingMessage = "Loading git branches…";
+    this.notice = undefined;
+
+    void this.branchRefsLoader()
+      .then((refs) => {
+        if (requestId !== this.loadRequestId) return;
+        if (refs.length === 0) {
+          this.notice = "No git branches or refs found.";
+          return;
+        }
+
+        this.actionMenu = {
+          title: "base branch/ref",
+          prompt:
+            "Select the base branch/ref. BetterDiff will compare merge-base(base, current branch) → current branch.",
+          items: refs.map(
+            (ref): ActionMenuItem => ({
+              id: `branch-${ref}`,
+              label: ref,
+              description: `current branch vs ${ref}`,
+              run: () =>
+                this.switchMode({ kind: "git-branch-selected", baseRef: ref }),
+            }),
+          ),
+          selectedIndex: 0,
+        };
+      })
+      .catch((error: unknown) => {
+        if (requestId !== this.loadRequestId) return;
+        this.notice = `Failed to load git branches: ${error instanceof Error ? error.message : String(error)}`;
+      })
+      .finally(() => {
+        if (requestId !== this.loadRequestId) return;
+        this.loadingMessage = undefined;
+        this.tui.requestRender();
+      });
+  }
+
+  private switchMode(request: DiffReviewLoadRequest): void {
+    if (!this.modelLoader) {
+      this.notice = "Diff mode switching is unavailable in this context.";
+      return;
+    }
+
+    const label = requestLabel(request);
+    const requestId = this.loadRequestId + 1;
+    this.loadRequestId = requestId;
+    this.actionMenu = undefined;
+    this.loadingMessage = `Loading ${label} diff…`;
+    this.notice = undefined;
+
+    void this.modelLoader(request)
+      .then((model) => {
+        if (requestId !== this.loadRequestId) return;
+        this.replaceModel(model);
+      })
+      .catch((error: unknown) => {
+        if (requestId !== this.loadRequestId) return;
+        this.notice = `Failed to load ${label}: ${error instanceof Error ? error.message : String(error)}`;
+      })
+      .finally(() => {
+        if (requestId !== this.loadRequestId) return;
+        this.loadingMessage = undefined;
+        this.tui.requestRender();
+      });
+  }
+
+  private replaceModel(model: ReviewModel): void {
+    this.model = model;
+    this.turnsById.clear();
+    this.parentById.clear();
+    this.childrenById.clear();
+    this.activeTurnIds.clear();
+    this.activeDescendantMemo.clear();
+    this.foldedBranchIds.clear();
+    this.foldedDetailIds.clear();
+    this.visibleParentById = new Map<string, string | undefined>();
+    this.visibleChildrenById = new Map<string | undefined, string[]>();
+    this.multipleVisibleRoots = false;
+    this.cachedRows = undefined;
+    this.selectedId = undefined;
+    this.detailTurnId = undefined;
+    this.pendingG = false;
+    this.clearPendingBracket();
+    this.actionMenu = undefined;
+
+    this.indexModel();
+    this.foldDetailHunksByDefault();
+    const initialTurnId = this.preferredHeadTurnId();
+    this.detailTurnId = initialTurnId;
+    this.selectedId = initialTurnId;
+    this.expandDetailRowsForTurn(initialTurnId);
+    this.invalidateRows();
   }
 
   private actionMenuTitle(row: RenderRow): string {
@@ -870,7 +1104,10 @@ export class DiffReviewComponent implements Component {
     };
     rows.push(turnRow);
 
-    if (this.detailTurnId === turn.id) {
+    if (
+      this.detailTurnId === turn.id ||
+      this.model.mode.kind === "git-changes"
+    ) {
       this.addDetailRows(rows, turn, turnRow);
     }
 
@@ -964,6 +1201,8 @@ export class DiffReviewComponent implements Component {
   }
 
   private sortActiveFirst(ids: readonly string[]): string[] {
+    if (this.model.mode.kind !== "session-turns") return [...ids];
+
     return [...ids].sort((left, right) => {
       const leftActive = this.subtreeContainsActiveTurn(left);
       const rightActive = this.subtreeContainsActiveTurn(right);
@@ -994,11 +1233,13 @@ export class DiffReviewComponent implements Component {
     const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
     const prefix = this.theme.fg("dim", this.prefixForTurnRow(row));
     const foldMarker = this.rootFoldMarker(row);
-    const pathMarker = this.activeTurnIds.has(row.id)
-      ? this.theme.fg("accent", "• ")
-      : "";
+    const pathMarker =
+      this.model.mode.kind === "session-turns" && this.activeTurnIds.has(row.id)
+        ? this.theme.fg("accent", "• ")
+        : "";
     const prompt = row.turn.prompt || "(empty prompt)";
-    const text = `${foldMarker}${pathMarker}${this.theme.fg("accent", "user: ")}${this.theme.fg("text", prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
+    const labelPrefix = this.turnLabelPrefix();
+    const text = `${foldMarker}${pathMarker}${labelPrefix ? this.theme.fg("accent", labelPrefix) : ""}${this.theme.fg("text", prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
     let line = cursor + prefix + (selected ? this.theme.bold(text) : text);
     if (selected) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width);
@@ -1517,10 +1758,14 @@ export class DiffReviewComponent implements Component {
   }
 
   private summaryText(): string {
+    const scopeText =
+      this.model.mode.kind === "session-turns"
+        ? `${this.model.turns.length} turn${this.model.turns.length === 1 ? "" : "s"} • `
+        : "";
     return [
       this.theme.fg(
         "muted",
-        `${this.model.turns.length} turn${this.model.turns.length === 1 ? "" : "s"} • ${this.model.totalFiles} file${this.model.totalFiles === 1 ? "" : "s"} • ${this.model.totalHunks} hunk${this.model.totalHunks === 1 ? "" : "s"} •`,
+        `${scopeText}${this.model.totalFiles} file${this.model.totalFiles === 1 ? "" : "s"} • ${this.model.totalHunks} hunk${this.model.totalHunks === 1 ? "" : "s"} •`,
       ),
       this.statText(this.model),
     ].join(" ");
@@ -1554,7 +1799,11 @@ export class DiffReviewComponent implements Component {
   }
 
   private turnLabel(turn: ReviewTurn): string {
-    return `user: ${turn.prompt || "(empty prompt)"}`;
+    return `${this.turnLabelPrefix()}${turn.prompt || "(empty prompt)"}`;
+  }
+
+  private turnLabelPrefix(): string {
+    return this.model.mode.kind === "session-turns" ? "user: " : "";
   }
 
   private describeRow(row: RenderRow): string {
@@ -1885,6 +2134,16 @@ function buildEditorArgs(
     return [...editorArgs, `${filePath}:${line}:1`];
   }
   return [...editorArgs, `+${line}`, filePath];
+}
+
+function requestLabel(request: DiffReviewLoadRequest): string {
+  if (request.kind === "git-branch-selected") {
+    return `Current branch vs ${request.baseRef}`;
+  }
+  return (
+    DIFF_MODE_CHOICES.find((choice) => choice.kind === request.kind)?.label ??
+    request.kind
+  );
 }
 
 function clamp(value: number, min: number, max: number): number {

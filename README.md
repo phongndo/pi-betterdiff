@@ -2,7 +2,7 @@
 
 A [pi](https://pi.dev) extension package focused on better session-diff ergonomics.
 
-The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations across the current pi session tree.
+The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations across the current pi session tree, plus practical Git changes and branch comparison modes.
 
 ## What is included
 
@@ -11,7 +11,11 @@ The extension now includes an initial `/diff` UI prototype for reviewing agent-p
 - ESLint + Prettier setup
 - **Vitest** test suite with coverage support
 - GitHub Actions for CI and release packaging
-- `/diff` command that opens a tree-inspired session diff navigator
+- `/diff` command that opens a tree-inspired diff navigator
+- default session-turn mode for reviewing agent-produced `edit`/`write` mutations by user turn
+- combined Git changes mode backed by `git diff --cached` and `git diff`, with staged changes shown above unstaged changes
+- branch comparison modes for current branch vs main/master and current branch vs a selected branch/ref
+- in-UI mode switching with `m`, plus `/diff git`, `/diff changes`, `/diff branch`, and `/diff branch <base-ref>` shortcuts
 - branch-aware tree of diff-producing user turns that opens on the active session head, stays flat for linear history, indents only at forks, and marks the active branch
 - unified review tree with inline changed files, hunks, and syntax-highlighted diff lines for the selected turn, plus file jumps via `[f` / `]f`
 - `enter` scoped actions menu with summaries and undo actions for the selected turn/file/hunk/diff line
@@ -46,7 +50,7 @@ npm run check
 pi -e .
 ```
 
-Then use `/diff` inside pi to open the diff review UI.
+Then use `/diff` inside pi to open the diff review UI. Use `m` inside the UI to switch between Session turns, Git changes, and branch comparisons; `/diff git` opens the combined Git view, `/diff branch` compares the current branch to main/master, and `/diff branch <base-ref>` compares the current branch against a selected base.
 
 ## Scripts
 
@@ -82,4 +86,4 @@ It re-validates the package, creates a tarball with `npm pack`, uploads it as a 
 
 ## Next steps
 
-Next work should deepen the prototype: richer write/overwrite diffs, better tests for renderer output, and more editor adapters.
+Next work should deepen the prototype: richer write/overwrite diffs, broader branch/ref comparison controls, better tests for renderer output, and more editor adapters.

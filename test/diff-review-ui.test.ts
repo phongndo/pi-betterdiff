@@ -5,6 +5,8 @@ import type { KeybindingsManager, Theme } from "@mariozechner/pi-coding-agent";
 import type { TUI } from "@mariozechner/pi-tui";
 import { describe, expect, it } from "vitest";
 
+import { GIT_CHANGES_REVIEW_MODE } from "../src/diff/git.js";
+import { SESSION_TURNS_REVIEW_MODE } from "../src/diff/model.js";
 import type {
   ReviewFile,
   ReviewHunk,
@@ -14,6 +16,8 @@ import type {
 import {
   DiffReviewComponent,
   type DiffReviewAction,
+  type DiffReviewBranchRefsLoader,
+  type DiffReviewModelLoader,
 } from "../src/render/diff-review-ui.js";
 
 const theme = {
@@ -107,7 +111,9 @@ describe("DiffReviewComponent", () => {
 
     const rendered = renderModel(model);
 
-    expect(rendered).toContain("Better Diff 1 turn • 1 file • 1 hunk • +2 -1");
+    expect(rendered).toContain(
+      "Better Diff — Session turns 1 turn • 1 file • 1 hunk • +2 -1",
+    );
     expect(rendered).toContain(
       "<selectedBg>› • user: change file +2 -1 1 file 1 hunk</selectedBg>",
     );
@@ -121,7 +127,7 @@ describe("DiffReviewComponent", () => {
     const rendered = renderModel(model);
 
     expect(rendered).toContain(
-      "Better Diff 1 turn • 2 files • 3 hunks • +6 -3",
+      "Better Diff — Session turns 1 turn • 2 files • 3 hunks • +6 -3",
     );
     expect(rendered).toContain("user: change many files +6 -3 2 files 3 hunks");
     expect(rendered).toContain("src/a.ts +3 -1 2 hunks");
@@ -148,6 +154,129 @@ describe("DiffReviewComponent", () => {
 
     expect(rendered).toContain(
       "<fg:muted>1 turn • 2 files • 3 hunks •</fg:muted> <fg:toolDiffAdded>+6</fg:toolDiffAdded> <fg:toolDiffRemoved>-3</fg:toolDiffRemoved>",
+    );
+  });
+
+  it("switches diff modes from the in-UI mode menu", async () => {
+    const loadedModes: string[] = [];
+    const component = createComponent(
+      buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 7,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+              },
+            ],
+          },
+        ],
+      }),
+      theme,
+      () => {},
+      keybindings,
+      process.cwd(),
+      (request) => {
+        loadedModes.push(request.kind);
+        return Promise.resolve(buildGitChangesModel());
+      },
+    );
+
+    component.handleInput("m");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("Actions · diff mode");
+    expect(rendered).toContain(
+      "✓ Session turns — agent edit/write history by user turn",
+    );
+    expect(rendered).toContain("Git changes — staged above unstaged");
+
+    component.handleInput("j");
+    component.handleInput("\r");
+    await flushPromises();
+
+    rendered = renderComponent(component);
+    expect(loadedModes).toEqual(["git-changes"]);
+    expect(rendered).toContain(
+      "Better Diff — Git changes 2 files • 2 hunks • +3 -1",
+    );
+    expect(rendered).toContain(
+      "Staged changes — HEAD → index +1 -0 1 file 1 hunk",
+    );
+    expect(rendered).toContain("src/staged.ts +1 -0 1 hunk");
+    expect(rendered).toContain(
+      "Unstaged changes — index → working tree +2 -1 1 file 1 hunk",
+    );
+    expect(rendered).toContain("src/unstaged.ts +2 -1 1 hunk");
+    expect(rendered.indexOf("Staged changes")).toBeLessThan(
+      rendered.indexOf("Unstaged changes"),
+    );
+    expect(rendered).not.toContain("user: Staged changes");
+  });
+
+  it("opens a branch picker for current branch vs selected branch", async () => {
+    const loadedRequests: string[] = [];
+    const component = createComponent(
+      buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 7,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+              },
+            ],
+          },
+        ],
+      }),
+      theme,
+      () => {},
+      keybindings,
+      process.cwd(),
+      (request) => {
+        if (request.kind === "git-branch-selected") {
+          loadedRequests.push(`${request.kind}:${request.baseRef}`);
+          return Promise.resolve(buildGitBranchModel(request.baseRef));
+        }
+        loadedRequests.push(request.kind);
+        return Promise.resolve(buildGitChangesModel());
+      },
+      () => Promise.resolve(["main", "release/1.0"]),
+    );
+
+    component.handleInput("m");
+    component.handleInput("j");
+    component.handleInput("j");
+    component.handleInput("j");
+    component.handleInput("\r");
+    await flushPromises();
+
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("Actions · base branch/ref");
+    expect(rendered).toContain("main — current branch vs main");
+    expect(rendered).toContain("release/1.0 — current branch vs release/1.0");
+
+    component.handleInput("j");
+    component.handleInput("\r");
+    await flushPromises();
+
+    rendered = renderComponent(component);
+    expect(loadedRequests).toEqual(["git-branch-selected:release/1.0"]);
+    expect(rendered).toContain(
+      "Better Diff — Current branch vs release/1.0 1 file • 1 hunk • +4 -2",
+    );
+    expect(rendered).toContain(
+      "merge-base(release/1.0, feature/foo) → feature/foo",
+    );
+    expect(rendered).toContain(
+      "Current branch vs release/1.0 — release/1.0...feature/foo +4 -2 1 file 1 hunk",
     );
   });
 
@@ -651,6 +780,8 @@ function createComponent(
   done: (action: DiffReviewAction) => void = () => {},
   componentKeybindings: KeybindingsManager = keybindings,
   cwd: string = process.cwd(),
+  modelLoader?: DiffReviewModelLoader,
+  branchRefsLoader?: DiffReviewBranchRefsLoader,
 ): DiffReviewComponent {
   return new DiffReviewComponent(
     model,
@@ -659,11 +790,19 @@ function createComponent(
     renderTheme,
     componentKeybindings,
     done,
+    modelLoader,
+    branchRefsLoader,
   );
 }
 
 function renderComponent(component: DiffReviewComponent, width = 200): string {
   return component.render(width).join("\n");
+}
+
+async function flushPromises(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function countOccurrences(text: string, search: string): number {
@@ -675,7 +814,7 @@ interface TestHunk {
   newLines: number;
   additions: number;
   removals: number;
-  toolName: "edit" | "write";
+  toolName: "edit" | "write" | "git";
   bodyLines?: string[];
 }
 
@@ -721,6 +860,86 @@ function buildPluralModel(): ReviewModel {
       },
     ],
   });
+}
+
+function buildGitChangesModel(): ReviewModel {
+  const stagedTurn = buildReviewTurn({
+    turnId: "git-changes-staged-turn",
+    ordinal: 1,
+    prompt: "Staged changes — HEAD → index",
+    files: [
+      {
+        path: "src/staged.ts",
+        hunks: [
+          {
+            jumpLine: 3,
+            newLines: 1,
+            additions: 1,
+            removals: 0,
+            toolName: "git",
+            bodyLines: ["+staged change"],
+          },
+        ],
+      },
+    ],
+  });
+  const unstagedTurn = buildReviewTurn({
+    turnId: "git-changes-unstaged-turn",
+    ordinal: 2,
+    prompt: "Unstaged changes — index → working tree",
+    files: [
+      {
+        path: "src/unstaged.ts",
+        hunks: [
+          {
+            jumpLine: 9,
+            newLines: 2,
+            additions: 2,
+            removals: 1,
+            toolName: "git",
+            bodyLines: ["-old unstaged", "+new unstaged", "+extra unstaged"],
+          },
+        ],
+      },
+    ],
+  });
+  return {
+    ...buildReviewModelFromTurns([stagedTurn, unstagedTurn], [stagedTurn.id]),
+    mode: GIT_CHANGES_REVIEW_MODE,
+  };
+}
+
+function buildGitBranchModel(baseRef: string): ReviewModel {
+  const turn = buildReviewTurn({
+    turnId: "git-branch-turn",
+    ordinal: 1,
+    prompt: `Current branch vs ${baseRef} — ${baseRef}...feature/foo`,
+    files: [
+      {
+        path: "src/branch.ts",
+        hunks: [
+          {
+            jumpLine: 11,
+            newLines: 4,
+            additions: 4,
+            removals: 2,
+            toolName: "git",
+            bodyLines: ["-old branch", "+new branch"],
+          },
+        ],
+      },
+    ],
+  });
+  return {
+    ...buildReviewModelFromTurns([turn], [turn.id]),
+    mode: {
+      kind: "git-branch-selected",
+      label: `Current branch vs ${baseRef}`,
+      description: `merge-base(${baseRef}, feature/foo) → feature/foo`,
+      baseRef,
+      emptyTitle: `No branch changes found for ${baseRef}...feature/foo.`,
+    },
+  };
 }
 
 function buildThreeFileModel(): ReviewModel {
@@ -921,6 +1140,7 @@ function buildReviewModelFromTurns(
   activeTurnIds: string[],
 ): ReviewModel {
   return {
+    mode: SESSION_TURNS_REVIEW_MODE,
     turns,
     roots: turns,
     activeTurnIds,

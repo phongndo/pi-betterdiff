@@ -14,8 +14,12 @@ This should feel spiritually similar to pi's `/tree` navigator, but focused only
 ### Slash command
 
 - `/diff`
+- `/diff git`
+- `/diff changes`
+- `/diff branch`
+- `/diff branch <base-ref>`
 
-This is the primary entrypoint for opening the diff review UI.
+`/diff` is the primary entrypoint and opens the default Session turns mode. The git/changes/branch arguments are shortcuts into the same UI; users can also press `m` inside BetterDiff to switch modes.
 
 ### Keyboard shortcut
 
@@ -113,6 +117,8 @@ The navigator should support vim-like motions by default.
 - `gg` — jump to top
 - `G` — jump to bottom
 - `enter` — open a scoped actions menu for the selected turn / file / hunk / diff line
+- `m` — open the diff mode menu
+- `r` — refresh the active diff mode
 - `q` / `esc` — close the diff UI from anywhere, or close the scoped actions menu when it is open
 
 ### Nice-to-have motions
@@ -177,21 +183,32 @@ That return flow is a core part of the UX, not an optional enhancement.
 
 ## Data source
 
-The review browser is based on **pi session mutation history**, not the git working tree. Its default scope is the current session tree, including branch/fork siblings that are present in pi's session data.
+The default review browser is based on **pi session mutation history**, not the git working tree. Its default scope is the current session tree, including branch/fork siblings that are present in pi's session data.
 
-Primary mutation sources:
+Primary session mutation sources:
 
 - `edit`
 - `write`
 
-The extension should normalize these into a single internal review model.
+A secondary Git changes mode is available for staged and unstaged review on one page. It loads both sources and renders staged changes above unstaged changes:
+
+- Staged section: `git diff --cached --no-color --no-ext-diff --patch --find-renames`
+- Unstaged section: `git diff --no-color --no-ext-diff --patch --find-renames`
+
+Branch comparison modes are available for PR-style current-branch review:
+
+- Current branch vs main/master: auto-detects `origin/HEAD`, `main`, `master`, `origin/main`, or `origin/master` and runs `git diff <base>...HEAD --no-color --no-ext-diff --patch --find-renames`
+- Current branch vs selected branch: lets the user select a base branch/ref, then runs the same merge-base diff shape, `<base>...HEAD`
+
+The extension normalizes these sources into a single internal review model while keeping the active mode, staged/unstaged sections, and branch comparison base explicit in the UI.
 
 ## Suggested internal review model
 
 The current implementation normalizes data into:
 
 - review model
-  - flat diff-producing turns for traversal/status
+  - explicit mode metadata for labels and empty states
+  - flat diff-producing turns or comparison roots for traversal/status
   - root diff-producing turns for tree rendering
 - review turn
   - originating user entry id
@@ -215,12 +232,14 @@ Hunk labels are renderer output derived from structured hunk fields. The review 
 
 ## Scope preference
 
-The initial product shape should emphasize **session diff review**, not git diff review.
+The initial product shape should emphasize **session diff review** by default, with Git changes and branch comparisons as explicit secondary modes.
 
 The default mental model is:
 
 - "show me what the agent changed"
 - not "show me everything git thinks changed"
+
+When users explicitly choose Git changes, the UI must clearly separate staged and unstaged sections and avoid mixing those changes with session mutation history. When users choose branch comparison, the UI must clearly show the base ref, current branch/ref, and merge-base semantics.
 
 ## UX priorities
 
@@ -234,12 +253,16 @@ The default mental model is:
 
 Implemented in the first UI pass:
 
-- `/diff` command
+- `/diff` command with Session turns as the default mode
+- `/diff git`, `/diff changes`, `/diff branch`, and `/diff branch <base-ref>` shortcuts
+- in-UI mode menu for Session turns, Git changes, current branch vs main/master, and current branch vs selected branch/ref
 - branch-aware diff-producing turn tree
 - unified tree with inline files, hunks, and diff body lines for the selected turn
 - fold/expand navigation for tree branches
 - review-only behavior; branch navigation/rewind stays in pi's native `/tree`
 - `enter` scoped actions menu for turn/file/hunk/diff-line rows, including generated summaries, custom summary instructions, and edit-hunk undo at the selected scope
+- combined Git changes mode with staged changes above unstaged changes, backed by a Git patch parser for added/deleted files, paths with spaces, and metadata-only/binary diff entries
+- current branch comparison modes using PR-style merge-base diffs (`<base>...HEAD`)
 - `ctrl+g` external-editor jump to the selected hunk line
 
 Still to harden:
