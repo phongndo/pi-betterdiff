@@ -124,7 +124,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→: page. tab: ${this.focus === "tree" ? "diff details" : "tree"}. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. enter: toggle. u: undo turn. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→: page. enter/tab: ${this.focus === "tree" ? "diff details" : "tree"}. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. u: undo turn. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -340,19 +340,27 @@ export class DiffReviewComponent implements Component {
     } else if (this.keybindings.matches(data, "tui.select.pageDown")) {
       this.pageFocusedSelection(1);
     } else if (this.keybindings.matches(data, "tui.select.confirm")) {
-      if (this.focus === "tree") this.toggleSelectedTurn();
+      if (this.focus === "tree") {
+        this.focusDetails();
+      } else {
+        this.openSelectedHunk();
+      }
     } else if (
       data === "h" ||
       this.keybindings.matches(data, "app.tree.foldOrUp")
     ) {
-      this.focus = "tree";
-      this.collapseOrMoveParent();
+      if (this.focus === "details") {
+        this.focus = "tree";
+      } else {
+        this.collapseOrMoveParent();
+      }
     } else if (
       data === "l" ||
       this.keybindings.matches(data, "app.tree.unfoldOrDown")
     ) {
-      this.focus = "tree";
-      this.expandOrMoveChild();
+      if (this.focus === "tree" && !this.expandOrMoveChild()) {
+        this.focusDetails();
+      }
     } else if (data === "c" || data === "C") {
       this.collapseAllBranches();
     } else if (data === "e" || data === "E") {
@@ -840,19 +848,6 @@ export class DiffReviewComponent implements Component {
     return this.visibleChildrenById.get(turnId)?.[0];
   }
 
-  private toggleSelectedTurn(): void {
-    const turn = this.getSelectedTurn();
-    if (!turn || (!this.isFoldable(turn.id) && !this.foldedIds.has(turn.id))) {
-      return;
-    }
-    if (this.foldedIds.has(turn.id)) {
-      this.foldedIds.delete(turn.id);
-    } else {
-      this.foldedIds.add(turn.id);
-    }
-    this.invalidateTreeRows();
-  }
-
   private collapseOrMoveParent(): void {
     const turn = this.getSelectedTurn();
     if (!turn) return;
@@ -866,16 +861,18 @@ export class DiffReviewComponent implements Component {
     if (parentId) this.selectTurn(parentId);
   }
 
-  private expandOrMoveChild(): void {
+  private expandOrMoveChild(): boolean {
     const turn = this.getSelectedTurn();
-    if (!turn) return;
+    if (!turn) return false;
     if (this.foldedIds.has(turn.id)) {
       this.foldedIds.delete(turn.id);
       this.invalidateTreeRows();
-      return;
+      return true;
     }
     const childId = this.firstVisibleChildId(turn.id);
-    if (childId) this.selectTurn(childId);
+    if (!childId) return false;
+    this.selectTurn(childId);
+    return true;
   }
 
   private collapseAllBranches(): void {
@@ -893,9 +890,20 @@ export class DiffReviewComponent implements Component {
   }
 
   private toggleFocus(): void {
-    this.focus = this.focus === "tree" ? "details" : "tree";
-    if (this.focus === "details") {
-      this.ensureDetailSelection(this.getDetailRows());
+    if (this.focus === "tree") {
+      this.focusDetails();
+    } else {
+      this.focus = "tree";
+    }
+  }
+
+  private focusDetails(): void {
+    const rows = this.getDetailRows();
+    this.ensureDetailSelection(rows);
+    if (rows.some(isSelectableDetailRow)) {
+      this.focus = "details";
+    } else {
+      this.notice = "Selected turn has no diff details.";
     }
   }
 

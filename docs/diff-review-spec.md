@@ -105,12 +105,13 @@ The navigator should support vim-like motions by default.
 
 ### Core motions
 
-- `j` / `k` — move selection down / up
-- `h` — collapse current item or move to parent
-- `l` — expand current item or move into child
+- `j` / `k` — move selection down / up in the focused pane
+- `enter` / `tab` — move from the turn tree into selected-turn diff details; return to tree with `tab` or `esc`
+- `h` — collapse current tree item or return from details to tree
+- `l` — expand current tree item, move into a child branch, or enter details when there is no child branch
 - `gg` — jump to top
 - `G` — jump to bottom
-- `enter` — toggle or focus selected item
+- `enter` — focus selected turn details, or open the selected detail hunk
 - `q` / `esc` — close the diff UI
 
 ### Nice-to-have motions
