@@ -106,6 +106,7 @@ The navigator should support vim-like motions by default.
 ### Core motions
 
 - `j` / `k` — move selection down / up in the unified tree
+- `ctrl+u` / `ctrl+d` — page up / page down through the unified tree
 - `tab` — jump between the selected turn and its first changed file
 - `h` — collapse current item or move to parent
 - `l` — expand current item or dive into child rows

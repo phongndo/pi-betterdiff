@@ -130,7 +130,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. enter/${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. enter/${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -291,9 +291,15 @@ export class DiffReviewComponent implements Component {
       data === "j"
     ) {
       this.moveSelection(1);
-    } else if (this.keybindings.matches(data, "tui.select.pageUp")) {
+    } else if (
+      this.keybindings.matches(data, "tui.select.pageUp") ||
+      matchesKey(data, "ctrl+u")
+    ) {
       this.moveSelection(-Math.max(1, this.lastPageSize));
-    } else if (this.keybindings.matches(data, "tui.select.pageDown")) {
+    } else if (
+      this.keybindings.matches(data, "tui.select.pageDown") ||
+      matchesKey(data, "ctrl+d")
+    ) {
       this.moveSelection(Math.max(1, this.lastPageSize));
     } else if (this.keybindings.matches(data, "tui.select.confirm")) {
       this.openSelectedHunk();
