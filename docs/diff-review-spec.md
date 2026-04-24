@@ -40,7 +40,7 @@ The default hierarchy should be one unified tree:
 1. **diff-producing user turn tree**
 2. inline changed files under the selected/open turn
 3. inline diff regions / hunks under each file
-4. syntax-highlighted changed lines under expanded hunks
+4. syntax-highlighted changed lines under hunks
 
 A BetterDiff tree child is created by pi session ancestry: a later diff-producing user turn descends from an earlier diff-producing user turn, with non-diff turns compressed out. For display, linear continuation stays visually flat; indentation/connectors are introduced only at actual fork points where a diff-producing turn has multiple visible continuations. If the user rewinds/forks a previous turn, the alternate continuations appear as sibling branches. Branches follow native `/tree` conventions where the active branch is shown first, active-path turns get a `•` marker, and the initial selection lands on the latest diff-producing turn on the active session head.
 
@@ -79,7 +79,7 @@ src/render/diff-view.ts  (+24 -8)  3 hunks
 
 ### Folding
 
-Users should be able to collapse or expand both branch nodes and inline review nodes. When `/diff` opens, the latest diff-producing turn on the active session head is selected and its file, hunk, and diff-line details are fully expanded for immediate review. Other turns keep hunk bodies collapsed for scanability until the user explicitly enters or expands them.
+Users should be able to collapse or expand branch nodes and file-level inline review nodes. Hunk rows are not collapsible: when a file is expanded, its hunk body lines remain visible so the selected prompt's changes are readable without another unfold step. When `/diff` opens, the latest diff-producing turn on the active session head is selected and its file, hunk, and diff-line details are visible for immediate review.
 
 ### Headers and line indicators
 
@@ -239,7 +239,7 @@ Implemented in the first UI pass:
 - unified tree with inline files, hunks, and diff body lines for the selected turn
 - fold/expand navigation for tree branches
 - review-only behavior; branch navigation/rewind stays in pi's native `/tree`
-- `enter` scoped actions menu for turn/file/hunk/diff-line rows, including generated summaries, custom summary instructions, native `/tree` handoff, and edit-hunk undo at the selected scope
+- `enter` scoped actions menu for turn/file/hunk/diff-line rows, including generated summaries, custom summary instructions, and edit-hunk undo at the selected scope
 - `ctrl+g` external-editor jump to the selected hunk line
 
 Still to harden:

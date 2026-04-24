@@ -136,7 +136,8 @@ describe("DiffReviewComponent", () => {
       "<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>",
     );
     expect(rendered).toContain("⊟ src/a.ts +3 -1 2 hunks");
-    expect(rendered).toContain("⊟ lines 7-9  edit  +2 -1 src/a.ts");
+    expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+    expect(rendered).not.toContain("⊟ lines 7-9  edit  +2 -1 src/a.ts");
     expect(rendered).toContain("+7 changed");
     expect(rendered).toContain("+20 changed");
     expect(rendered).toContain("+30 changed");
@@ -224,9 +225,7 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain(
       "Custom summary… — Add focus instructions before generating the summary",
     );
-    expect(rendered).toContain(
-      "Jump to native /tree — Close BetterDiff and hand off to pi's native tree navigator",
-    );
+    expect(rendered).not.toContain("Jump to native /tree");
     expect(rendered).toContain(
       "Undo this turn — user: change file · 1 edit hunk / 1 file",
     );
@@ -287,24 +286,6 @@ describe("DiffReviewComponent", () => {
     expect(action.summary.body).toContain("+7 changed");
   });
 
-  it("returns a native-tree action from the scoped action menu", () => {
-    let action: DiffReviewAction | undefined;
-    const component = createComponent(buildPluralModel(), theme, (result) => {
-      action = result;
-    });
-
-    component.handleInput("\r");
-    component.handleInput("j");
-    component.handleInput("j");
-    component.handleInput("\r");
-
-    expect(action).toEqual({
-      type: "native-tree",
-      entryId: "turn-1:user",
-      label: "user: change many files",
-    });
-  });
-
   it("cancels the scoped action menu without closing the diff review", () => {
     let closeCount = 0;
     const component = createComponent(buildPluralModel(), theme, (action) => {
@@ -350,7 +331,6 @@ describe("DiffReviewComponent", () => {
       "Undo this hunk — src/a.ts · 1 edit hunk / 1 file",
     );
 
-    component.handleInput("j");
     component.handleInput("j");
     component.handleInput("j");
     component.handleInput("\r");
@@ -546,27 +526,29 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("lines 30-31  write  +3 -2 src/b.ts");
   });
 
-  it("scopes c/e to hunk rows when selected on a hunk", () => {
+  it("keeps hunk rows non-collapsible", () => {
     const component = createComponent(buildPluralModel());
 
     component.handleInput("l");
     component.handleInput("l");
     let rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+    );
     expect(rendered).toContain("+7 changed");
     expect(rendered).toContain("+20 changed");
     expect(rendered).toContain("+30 changed");
 
     component.handleInput("c");
     rendered = renderComponent(component);
-    expect(rendered).not.toContain("+7 changed");
-    expect(rendered).not.toContain("+20 changed");
-    expect(rendered).toContain("+30 changed");
-
-    component.handleInput("e");
-    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+    );
     expect(rendered).toContain("+7 changed");
     expect(rendered).toContain("+20 changed");
     expect(rendered).toContain("+30 changed");
+    expect(rendered).not.toContain("⊞ lines 7-9");
+    expect(rendered).not.toContain("⊟ lines 7-9");
   });
 
   it("keeps file navigation on files while hunks stay visible until l enters them", () => {
@@ -586,13 +568,14 @@ describe("DiffReviewComponent", () => {
     );
     expect(rendered).toContain("lines 30-31  write  +3 -2 src/b.ts");
     expect(rendered).not.toContain("<selectedBg>› ├─ ⊞ lines 7-9");
+    expect(rendered).not.toContain("<selectedBg>› ├─ ⊟ lines 7-9");
 
     const hunkComponent = createComponent(buildPluralModel());
     hunkComponent.handleInput("l");
     hunkComponent.handleInput("l");
     rendered = renderComponent(hunkComponent);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ ⊟ lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+      "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
     );
   });
 
@@ -620,14 +603,14 @@ describe("DiffReviewComponent", () => {
     component.handleInput("l");
     let rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ ⊟ lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+      "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
     );
     expect(rendered).toContain("+7 changed");
 
     component.handleInput("j");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  └─ ⊟ line 20  edit  +1 -0 src/a.ts</selectedBg>",
+      "<selectedBg>› │  └─   line 20  edit  +1 -0 src/a.ts</selectedBg>",
     );
     expect(rendered).not.toContain("<selectedBg>› │     +7 changed");
 
@@ -647,13 +630,13 @@ describe("DiffReviewComponent", () => {
     component.handleInput("\u001b[C");
     let rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>›    └─ ⊟ line 30  edit  +3 -0 src/a.ts</selectedBg>",
+      "<selectedBg>›    └─   line 30  edit  +3 -0 src/a.ts</selectedBg>",
     );
 
     component.handleInput("\u001b[D");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>›    ├─ ⊟ line 10  edit  +1 -0 src/a.ts</selectedBg>",
+      "<selectedBg>›    ├─   line 10  edit  +1 -0 src/a.ts</selectedBg>",
     );
   });
 });

@@ -54,15 +54,6 @@ export default function betterDiffExtension(pi: ExtensionAPI): void {
   ): Promise<void> {
     if (action.type === "summarize") {
       await sendSummaryRequest(action.summary, action.custom, ctx);
-      return;
-    }
-
-    if (action.type === "native-tree") {
-      ctx.ui.setEditorText("/tree");
-      ctx.ui.notify(
-        `Native /tree queued for ${action.label}. Press Enter to open it.`,
-        "info",
-      );
     }
   }
 

@@ -34,11 +34,6 @@ export type DiffReviewAction =
       type: "summarize";
       custom: boolean;
       summary: DiffReviewSummaryRequest;
-    }
-  | {
-      type: "native-tree";
-      entryId: string;
-      label: string;
     };
 
 interface Gutter {
@@ -545,18 +540,6 @@ export class DiffReviewComponent implements Component {
             summary: this.summaryRequestForRow(row),
           }),
       },
-      {
-        id: "native-tree",
-        label: "Jump to native /tree",
-        description:
-          "Close BetterDiff and hand off to pi's native tree navigator",
-        run: () =>
-          this.done({
-            type: "native-tree",
-            entryId: row.turn.userEntryId,
-            label: this.turnLabel(row.turn),
-          }),
-      },
     ];
 
     if (row.kind === "hunk" || row.kind === "diff") {
@@ -789,15 +772,7 @@ export class DiffReviewComponent implements Component {
     }
   }
 
-  private foldDetailHunksByDefault(): void {
-    for (const turn of this.model.turns) {
-      for (const file of turn.files) {
-        for (const hunk of file.hunks) {
-          this.foldedDetailIds.add(hunk.id);
-        }
-      }
-    }
-  }
+  private foldDetailHunksByDefault(): void {}
 
   private expandDetailRowsForTurn(turnId: string | undefined): void {
     const turn = turnId ? this.turnsById.get(turnId) : undefined;
@@ -805,9 +780,6 @@ export class DiffReviewComponent implements Component {
 
     for (const file of turn.files) {
       this.foldedDetailIds.delete(file.id);
-      for (const hunk of file.hunks) {
-        this.foldedDetailIds.delete(hunk.id);
-      }
     }
   }
 
@@ -975,8 +947,6 @@ export class DiffReviewComponent implements Component {
           file,
           hunk,
         });
-        if (this.foldedDetailIds.has(hunk.id)) continue;
-
         for (let index = 0; index < hunk.bodyLines.length; index++) {
           rows.push({
             id: `${hunk.id}:line:${index}`,
@@ -1291,12 +1261,7 @@ export class DiffReviewComponent implements Component {
     }
 
     if (row.kind === "hunk") {
-      if (this.isDetailExpanded(row)) {
-        this.foldedDetailIds.add(row.id);
-        this.invalidateRows();
-      } else {
-        this.selectRow(row.file.id);
-      }
+      this.selectRow(row.file.id);
       return;
     }
 
@@ -1360,11 +1325,6 @@ export class DiffReviewComponent implements Component {
     }
 
     if (row.kind === "hunk") {
-      if (this.foldedDetailIds.has(row.id)) {
-        this.foldedDetailIds.delete(row.id);
-        this.invalidateRows();
-        return;
-      }
       this.selectRow(
         row.hunk.bodyLines.length > 0 ? `${row.hunk.id}:line:0` : row.id,
       );
@@ -1379,11 +1339,9 @@ export class DiffReviewComponent implements Component {
     } else if (row.kind === "file") {
       this.collapseFileLevel(row.turn);
     } else if (row.kind === "hunk") {
-      this.collapseHunkLevel(row.file);
+      return;
     } else {
-      this.foldedDetailIds.add(row.hunk.id);
       this.selectRow(row.hunk.id);
-      this.invalidateRows();
     }
   }
 
@@ -1395,10 +1353,11 @@ export class DiffReviewComponent implements Component {
     } else if (row.kind === "file") {
       this.expandFileLevel(row.turn);
     } else if (row.kind === "hunk") {
-      this.expandHunkLevel(row.file);
+      this.selectRow(
+        row.hunk.bodyLines.length > 0 ? `${row.hunk.id}:line:0` : row.id,
+      );
     } else {
-      this.foldedDetailIds.delete(row.hunk.id);
-      this.invalidateRows();
+      this.selectRow(row.id);
     }
   }
 
@@ -1428,9 +1387,6 @@ export class DiffReviewComponent implements Component {
   private collapseFileLevel(turn: ReviewTurn): void {
     for (const file of turn.files) {
       this.foldedDetailIds.add(file.id);
-      for (const hunk of file.hunks) {
-        this.foldedDetailIds.add(hunk.id);
-      }
     }
     this.invalidateRows();
   }
@@ -1439,21 +1395,6 @@ export class DiffReviewComponent implements Component {
     this.detailTurnId = turn.id;
     for (const file of turn.files) {
       this.foldedDetailIds.delete(file.id);
-    }
-    this.invalidateRows();
-  }
-
-  private collapseHunkLevel(file: ReviewFile): void {
-    for (const hunk of file.hunks) {
-      this.foldedDetailIds.add(hunk.id);
-    }
-    this.invalidateRows();
-  }
-
-  private expandHunkLevel(file: ReviewFile): void {
-    this.foldedDetailIds.delete(file.id);
-    for (const hunk of file.hunks) {
-      this.foldedDetailIds.delete(hunk.id);
     }
     this.invalidateRows();
   }
@@ -1535,9 +1476,7 @@ export class DiffReviewComponent implements Component {
   }
 
   private isDetailFoldable(row: FoldableDetailRow): boolean {
-    return row.kind === "file"
-      ? row.file.hunks.length > 0
-      : row.hunk.bodyLines.length > 0;
+    return row.kind === "file" && row.file.hunks.length > 0;
   }
 
   private getAllHunks(turn: ReviewTurn): ReviewHunk[] {
