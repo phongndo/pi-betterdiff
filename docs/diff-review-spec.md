@@ -203,11 +203,13 @@ The current implementation normalizes data into:
 - review hunk
   - stable id
   - originating session entry id
-  - tool name
+  - tool name / source label
   - old/new range where available
-  - display header
-  - patch body
   - primary jump line
+  - additions/removals
+  - patch body
+
+Hunk labels are renderer output derived from structured hunk fields. The review model should not store preformatted display headers.
 
 ## Scope preference
 
