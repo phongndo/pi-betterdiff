@@ -12,7 +12,7 @@ The extension now includes an initial `/diff` UI prototype for reviewing agent-p
 - **Vitest** test suite with coverage support
 - GitHub Actions for CI and release packaging
 - `/diff` command that opens a tree-inspired session diff navigator
-- branch-aware tree of diff-producing user turns that stays flat for linear history, indents only at forks, and marks the active branch
+- branch-aware tree of diff-producing user turns that opens on the active session head, stays flat for linear history, indents only at forks, and marks the active branch
 - selected-turn detail pane for changed files, hunks, and syntax-highlighted diff lines, focusable with `tab` and file jumps via `[f` / `]f`
 - `ctrl+g` external-editor handoff for the selected diff hunk
 

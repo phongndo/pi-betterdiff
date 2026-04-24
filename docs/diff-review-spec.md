@@ -42,7 +42,7 @@ The default hierarchy should be:
 3. **selected-turn diff region / hunk details**
 4. syntax-highlighted changed lines / patch body in the detail pane
 
-A BetterDiff tree child is created by pi session ancestry: a later diff-producing user turn descends from an earlier diff-producing user turn, with non-diff turns compressed out. For display, linear continuation stays visually flat; indentation/connectors are introduced only at actual fork points where a diff-producing turn has multiple visible continuations. If the user rewinds/forks a previous turn, the alternate continuations appear as sibling branches. Branches follow native `/tree` conventions where the active branch is shown first and active-path turns get a `•` marker.
+A BetterDiff tree child is created by pi session ancestry: a later diff-producing user turn descends from an earlier diff-producing user turn, with non-diff turns compressed out. For display, linear continuation stays visually flat; indentation/connectors are introduced only at actual fork points where a diff-producing turn has multiple visible continuations. If the user rewinds/forks a previous turn, the alternate continuations appear as sibling branches. Branches follow native `/tree` conventions where the active branch is shown first, active-path turns get a `•` marker, and the initial selection lands on the latest diff-producing turn on the active session head.
 
 Files, hunks, and diff body lines should **not** create tree children. They are details attached to the selected diff-producing user turn.
 

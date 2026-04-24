@@ -270,7 +270,10 @@ export class DiffReviewComponent implements Component {
 
   private ensureSelectedTurnVisible(rows: readonly TurnRow[]): void {
     if (rows.some((row) => row.id === this.selectedTurnId)) return;
-    this.selectTurn(rows[0]?.id);
+
+    const preferredHeadId = this.preferredHeadTurnId();
+    const preferredVisibleRow = rows.find((row) => row.id === preferredHeadId);
+    this.selectTurn(preferredVisibleRow?.id ?? rows[rows.length - 1]?.id);
   }
 
   private setPendingBracket(bracket: "[" | "]"): void {
@@ -475,10 +478,13 @@ export class DiffReviewComponent implements Component {
   }
 
   private firstSelectableTurnId(): string | undefined {
+    return this.preferredHeadTurnId() ?? this.model.roots[0]?.id;
+  }
+
+  private preferredHeadTurnId(): string | undefined {
     return (
       this.model.activeTurnIds[this.model.activeTurnIds.length - 1] ??
-      this.model.roots[0]?.id ??
-      this.model.turns[0]?.id
+      this.model.turns[this.model.turns.length - 1]?.id
     );
   }
 
