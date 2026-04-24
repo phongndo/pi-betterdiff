@@ -687,23 +687,22 @@ export class DiffReviewComponent implements Component {
 
   private formatHunkLabel(hunk: ReviewHunk): string {
     return [
-      this.formatHunkRegion(hunk.header),
+      this.formatHunkRegion(hunk),
       this.theme.fg("warning", hunk.toolName),
       this.statText(hunk),
     ].join("  ");
   }
 
-  private formatHunkRegion(header: string): string {
-    const region = /^(.*?)(?:\s{2,}|$)/u.exec(header)?.[1] ?? header;
-    const match = /^(lines?)\s+(\d+)(?:-(\d+))?$/u.exec(region);
-    if (!match) return this.theme.fg("borderAccent", region);
-
-    const label = match[1] ?? "line";
-    const start = match[2] ?? "";
-    const end = match[3];
-    return end
-      ? `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", start)}${this.theme.fg("muted", "-")}${this.theme.fg("borderAccent", end)}`
-      : `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", start)}`;
+  private formatHunkRegion(hunk: ReviewHunk): string {
+    const start = hunk.jumpLine;
+    const end =
+      hunk.newLines && hunk.newLines > 1
+        ? hunk.jumpLine + hunk.newLines - 1
+        : hunk.jumpLine;
+    const label = end === start ? "line" : "lines";
+    return end === start
+      ? `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}`
+      : `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}${this.theme.fg("muted", "-")}${this.theme.fg("borderAccent", String(end))}`;
   }
 
   private renderDiffLine(line: string, filePath: string): string {
