@@ -105,8 +105,10 @@ export class DiffReviewComponent implements Component {
   ) {
     this.indexModel();
     this.foldDetailHunksByDefault();
-    this.detailTurnId = this.preferredHeadTurnId();
-    this.selectedId = this.detailTurnId;
+    const initialTurnId = this.preferredHeadTurnId();
+    this.detailTurnId = initialTurnId;
+    this.selectedId = initialTurnId;
+    this.expandDetailRowsForTurn(initialTurnId);
   }
 
   invalidate(): void {
@@ -366,6 +368,18 @@ export class DiffReviewComponent implements Component {
         for (const hunk of file.hunks) {
           this.foldedDetailIds.add(hunk.id);
         }
+      }
+    }
+  }
+
+  private expandDetailRowsForTurn(turnId: string | undefined): void {
+    const turn = turnId ? this.turnsById.get(turnId) : undefined;
+    if (!turn) return;
+
+    for (const file of turn.files) {
+      this.foldedDetailIds.delete(file.id);
+      for (const hunk of file.hunks) {
+        this.foldedDetailIds.delete(hunk.id);
       }
     }
   }

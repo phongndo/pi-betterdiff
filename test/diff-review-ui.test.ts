@@ -123,6 +123,19 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
   });
 
+  it("fully expands the most recent turn when opened", () => {
+    const rendered = renderModel(buildPluralModel());
+
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>",
+    );
+    expect(rendered).toContain("⊟ src/a.ts +3 -1 2 hunks");
+    expect(rendered).toContain("⊟ lines 7-9  edit  +2 -1 src/a.ts");
+    expect(rendered).toContain("+7 changed");
+    expect(rendered).toContain("+20 changed");
+    expect(rendered).toContain("+30 changed");
+  });
+
   it("renders summary additions and removals as separate color segments", () => {
     const rendered = renderModel(buildPluralModel(), colorTracingTheme);
 
@@ -311,19 +324,21 @@ describe("DiffReviewComponent", () => {
     component.handleInput("l");
     component.handleInput("l");
     let rendered = renderComponent(component);
-    expect(rendered).not.toContain("+7 changed");
-    expect(rendered).not.toContain("+20 changed");
-
-    component.handleInput("e");
-    rendered = renderComponent(component);
     expect(rendered).toContain("+7 changed");
     expect(rendered).toContain("+20 changed");
-    expect(rendered).not.toContain("+30 changed");
+    expect(rendered).toContain("+30 changed");
 
     component.handleInput("c");
     rendered = renderComponent(component);
     expect(rendered).not.toContain("+7 changed");
     expect(rendered).not.toContain("+20 changed");
+    expect(rendered).toContain("+30 changed");
+
+    component.handleInput("e");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("+7 changed");
+    expect(rendered).toContain("+20 changed");
+    expect(rendered).toContain("+30 changed");
   });
 
   it("keeps file navigation on files while hunks stay visible until l enters them", () => {
@@ -349,7 +364,7 @@ describe("DiffReviewComponent", () => {
     hunkComponent.handleInput("l");
     rendered = renderComponent(hunkComponent);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ ⊞ lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+      "<selectedBg>› │  ├─ ⊟ lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
     );
   });
 
@@ -370,10 +385,9 @@ describe("DiffReviewComponent", () => {
     );
   });
 
-  it("keeps hunk navigation on hunks while diff lines stay visible until l enters them", () => {
+  it("keeps hunk navigation on hunks while visible diff lines stay unselected until l enters them", () => {
     const component = createComponent(buildPluralModel());
 
-    component.handleInput("l");
     component.handleInput("l");
     component.handleInput("l");
     let rendered = renderComponent(component);
@@ -385,12 +399,11 @@ describe("DiffReviewComponent", () => {
     component.handleInput("j");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  └─ ⊞ line 20  edit  +1 -0 src/a.ts</selectedBg>",
+      "<selectedBg>› │  └─ ⊟ line 20  edit  +1 -0 src/a.ts</selectedBg>",
     );
     expect(rendered).not.toContain("<selectedBg>› │     +7 changed");
 
     const diffLineComponent = createComponent(buildPluralModel());
-    diffLineComponent.handleInput("l");
     diffLineComponent.handleInput("l");
     diffLineComponent.handleInput("l");
     diffLineComponent.handleInput("l");
@@ -406,13 +419,13 @@ describe("DiffReviewComponent", () => {
     component.handleInput("\u001b[C");
     let rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>›    └─ ⊞ line 30  edit  +3 -0 src/a.ts</selectedBg>",
+      "<selectedBg>›    └─ ⊟ line 30  edit  +3 -0 src/a.ts</selectedBg>",
     );
 
     component.handleInput("\u001b[D");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>›    ├─ ⊞ line 10  edit  +1 -0 src/a.ts</selectedBg>",
+      "<selectedBg>›    ├─ ⊟ line 10  edit  +1 -0 src/a.ts</selectedBg>",
     );
   });
 });

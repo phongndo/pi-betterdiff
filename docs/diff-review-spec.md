@@ -79,7 +79,7 @@ src/render/diff-view.ts  (+24 -8)  3 hunks
 
 ### Folding
 
-Users should be able to collapse or expand both branch nodes and inline review nodes. Files are shown inline under the selected turn; hunks start collapsed for scanability and can be expanded with `l`.
+Users should be able to collapse or expand both branch nodes and inline review nodes. When `/diff` opens, the latest diff-producing turn on the active session head is selected and its file, hunk, and diff-line details are fully expanded for immediate review. Other turns keep hunk bodies collapsed for scanability until the user explicitly enters or expands them.
 
 ### Headers and line indicators
 
