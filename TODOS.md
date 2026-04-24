@@ -128,27 +128,6 @@ Feature goals for future BetterDiff diff modes and navigation/search capabilitie
     - very large diffs
   - **Definition of done:** The user can tell exactly which refs are being compared and what comparison semantics are being used.
 
-- [ ] **Session branch -> session branch diff**
-  - **User goal:** Compare the resulting file state at one pi session branch endpoint against another pi session branch endpoint.
-  - **Primary command/use case:** User selects two pi session branches/endpoints and asks BetterDiff to compare them.
-  - **Data source:** pi session data plus whatever file snapshot/reconstruction mechanism is available.
-  - **Comparison meaning:** Endpoint-to-endpoint state comparison. This is different from turn-by-turn mutation review.
-  - **UI label:** Make the comparison explicit, e.g. `Session branch diff: <left label> -> <right label>`.
-  - **Expected content:**
-    - left branch/session endpoint label
-    - right branch/session endpoint label
-    - changed files between those endpoints
-    - hunks and diff lines for endpoint differences
-    - clear stats for additions/removals
-  - **Important edge cases:**
-    - file exists only on left endpoint
-    - file exists only on right endpoint
-    - same file changed differently on both branches
-    - branch endpoint cannot be reconstructed exactly
-    - `write` overwrites where before/after state is incomplete
-    - binary or non-text files
-  - **Definition of done:** The UI clearly distinguishes branch endpoint comparison from turn-by-turn history review and does not present incomplete reconstruction as an exact diff.
-
 ## Search and grep goals
 
 - [ ] **Tree-style search inside BetterDiff**
