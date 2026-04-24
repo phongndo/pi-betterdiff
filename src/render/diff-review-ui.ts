@@ -129,7 +129,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→: page. enter/tab: ${this.focus === "tree" ? "diff details" : "tree"}. [/]: hunk. [f/]f: file. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→: page. tab: ${this.focus === "tree" ? "diff details" : "tree"}. enter: toggle/open. [/]: hunk. [f/]f: file. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -273,12 +273,6 @@ export class DiffReviewComponent implements Component {
     this.selectTurn(rows[0]?.id);
   }
 
-  private clearSearch(): void {
-    this.searchQuery = "";
-    this.foldedIds.clear();
-    this.invalidateTreeRows();
-  }
-
   private setPendingBracket(bracket: "[" | "]"): void {
     this.clearPendingBracket();
     this.pendingBracket = bracket;
@@ -330,15 +324,7 @@ export class DiffReviewComponent implements Component {
     }
 
     if (this.keybindings.matches(data, "tui.select.cancel")) {
-      if (this.searchQuery) {
-        this.clearSearch();
-        this.tui.requestRender();
-      } else if (this.focus === "details") {
-        this.focus = "tree";
-        this.tui.requestRender();
-      } else {
-        this.done({ type: "close" });
-      }
+      this.done({ type: "close" });
       return;
     }
 
@@ -381,9 +367,7 @@ export class DiffReviewComponent implements Component {
     } else if (this.keybindings.matches(data, "tui.select.pageDown")) {
       this.pageFocusedSelection(1);
     } else if (this.keybindings.matches(data, "tui.select.confirm")) {
-      if (this.focus === "tree") {
-        this.focusDetails();
-      } else {
+      if (this.focus === "details") {
         this.confirmDetailSelection();
       }
     } else if (
@@ -391,7 +375,7 @@ export class DiffReviewComponent implements Component {
       this.keybindings.matches(data, "app.tree.foldOrUp")
     ) {
       if (this.focus === "details") {
-        this.moveDetailParentOrTree();
+        this.moveDetailParent();
       } else {
         this.collapseOrMoveParent();
       }
@@ -401,8 +385,8 @@ export class DiffReviewComponent implements Component {
     ) {
       if (this.focus === "details") {
         this.moveDetailChild();
-      } else if (!this.expandOrMoveChild()) {
-        this.focusDetails();
+      } else {
+        this.expandOrMoveChild();
       }
     } else if (data === "c" || data === "C") {
       if (this.focus === "details") {
@@ -920,18 +904,13 @@ export class DiffReviewComponent implements Component {
     this.selectedDetailId = files[nextIndex]?.id;
   }
 
-  private moveDetailParentOrTree(): void {
+  private moveDetailParent(): void {
     const selectedRow = this.getSelectedDetailRow();
-    if (!selectedRow) {
-      this.focus = "tree";
-      return;
-    }
+    if (!selectedRow) return;
 
     if (selectedRow.kind === "file") {
       if (this.isDetailExpanded(selectedRow)) {
         this.foldedDetailIds.add(selectedRow.id);
-      } else {
-        this.focus = "tree";
       }
       return;
     }
