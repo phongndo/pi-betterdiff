@@ -1,0 +1,111 @@
+# TODOs
+
+Feature goals for future BetterDiff diff modes. This file tracks product/feature work only. Bug fixes, review findings, and cleanup issues belong in `ISSUES.md`.
+
+## Diff type goals
+
+- [ ] **Session turn-by-turn diff**
+  - **User goal:** Show what the agent changed, grouped by user turn.
+  - **Primary command/use case:** Default `/diff` behavior.
+  - **Data source:** pi session tree mutation history from `edit` and `write` tool results.
+  - **Comparison meaning:** Not an endpoint comparison. This is a chronological/session-tree review of mutations produced by assistant responses.
+  - **Grouping:** Diff-producing user turns, arranged by compressed pi session ancestry.
+  - **UI label:** Make the mode explicit, e.g. `Session turns` or `Turn-by-turn session diff`.
+  - **Expected content:**
+    - user prompt preview for each changed turn
+    - changed files under the selected turn
+    - hunks under each file
+    - diff body lines under expanded hunks
+    - additions/removals and hunk/file counts
+  - **Important edge cases:**
+    - multiple changed files in one turn
+    - multiple hunks in one file
+    - branch/fork siblings in the pi session tree
+    - `write` previews that are truncated
+    - turns with edits on inactive branches
+  - **Definition of done:** The current session review remains usable as the default mode and clearly says it is reviewing session turns.
+
+- [ ] **Session branch -> session branch diff**
+  - **User goal:** Compare the resulting file state at one pi session branch endpoint against another pi session branch endpoint.
+  - **Primary command/use case:** User selects two pi session branches/endpoints and asks BetterDiff to compare them.
+  - **Data source:** pi session data plus whatever file snapshot/reconstruction mechanism is available.
+  - **Comparison meaning:** Endpoint-to-endpoint state comparison. This is different from turn-by-turn mutation review.
+  - **UI label:** Make the comparison explicit, e.g. `Session branch diff: <left label> -> <right label>`.
+  - **Expected content:**
+    - left branch/session endpoint label
+    - right branch/session endpoint label
+    - changed files between those endpoints
+    - hunks and diff lines for endpoint differences
+    - clear stats for additions/removals
+  - **Important edge cases:**
+    - file exists only on left endpoint
+    - file exists only on right endpoint
+    - same file changed differently on both branches
+    - branch endpoint cannot be reconstructed exactly
+    - `write` overwrites where before/after state is incomplete
+    - binary or non-text files
+  - **Definition of done:** The UI clearly distinguishes branch endpoint comparison from turn-by-turn history review and does not present incomplete reconstruction as an exact diff.
+
+- [ ] **Git staged diff**
+  - **User goal:** Show changes currently staged for commit.
+  - **Primary command/use case:** Review the git index before committing.
+  - **Data source:** `git diff --cached` / `git diff --staged`.
+  - **Comparison meaning:** Git index compared against `HEAD`.
+  - **UI label:** Make the mode explicit, e.g. `Git staged`.
+  - **Expected content:**
+    - files staged for commit
+    - staged hunks and diff body lines
+    - additions/removals for staged content only
+    - clear empty state when nothing is staged
+  - **Important edge cases:**
+    - no staged changes
+    - newly added files
+    - deleted files
+    - renamed files
+    - mode-only changes
+    - binary files
+    - paths with spaces
+  - **Definition of done:** Staged changes can be reviewed without mixing in unstaged working-tree changes.
+
+- [ ] **Git unstaged diff**
+  - **User goal:** Show working tree changes that have not been staged.
+  - **Primary command/use case:** Review local edits before staging them.
+  - **Data source:** `git diff`.
+  - **Comparison meaning:** Working tree compared against the git index.
+  - **UI label:** Make the mode explicit, e.g. `Git unstaged`.
+  - **Expected content:**
+    - modified tracked files with unstaged changes
+    - unstaged hunks and diff body lines
+    - additions/removals for unstaged content only
+    - clear empty state when nothing is unstaged
+  - **Important edge cases:**
+    - no unstaged changes
+    - file has both staged and unstaged changes
+    - deleted tracked files
+    - binary files
+    - paths with spaces
+  - **Definition of done:** Unstaged changes can be reviewed independently from staged changes and session mutation history.
+
+- [ ] **Git branch/ref -> branch/ref diff**
+  - **User goal:** Compare two git refs, usually branch to branch.
+  - **Primary command/use case:** Review differences such as `main -> feature/foo`, `HEAD~1 -> HEAD`, or `origin/main -> current branch`.
+  - **Data source:** git diff between two validated refs.
+  - **Comparison meaning:** Ref-to-ref comparison. The product must choose whether this means direct endpoint comparison or merge-base comparison.
+  - **UI label:** Make the selected refs explicit, e.g. `Git branch diff: <left ref> -> <right ref>`.
+  - **Required product decision:** Decide and document two-dot vs three-dot semantics:
+    - two-dot: direct endpoint difference, `<left>..<right>`
+    - three-dot: merge-base to right side, `<left>...<right>`
+  - **Expected content:**
+    - left ref label
+    - right ref label
+    - changed files between refs
+    - hunks and diff body lines
+    - additions/removals for the selected ref comparison
+  - **Important edge cases:**
+    - invalid ref names
+    - refs with no common ancestor if three-dot semantics are used
+    - renamed files
+    - deleted files
+    - binary files
+    - very large diffs
+  - **Definition of done:** The user can tell exactly which refs are being compared and what comparison semantics are being used.
