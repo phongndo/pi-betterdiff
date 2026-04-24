@@ -118,8 +118,6 @@ The navigator should support vim-like motions by default.
 
 - `[` / `]` — previous / next hunk
 - `[f` / `]f` — previous / next changed file in the selected turn details
-- `/` or type-to-search — search by prompt, file path, or diff text
-- `n` / `N` — next / previous search result
 - `zc` / `zo` / `za` style fold helpers if they fit naturally
 
 ### Non-vim fallback

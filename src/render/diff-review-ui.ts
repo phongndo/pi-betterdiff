@@ -89,7 +89,6 @@ export class DiffReviewComponent implements Component {
   private detailScrollOffset = 0;
   private lastTreePageSize = 5;
   private lastDetailsPageSize = 5;
-  private searchQuery = "";
   private pendingG = false;
   private pendingBracket: "[" | "]" | undefined;
   private pendingBracketTimer: ReturnType<typeof setTimeout> | undefined;
@@ -134,7 +133,6 @@ export class DiffReviewComponent implements Component {
         width,
       ),
     );
-    lines.push(this.renderSearchLine(width));
     if (this.notice) {
       lines.push(
         truncateToWidth(`  ${this.theme.fg("warning", this.notice)}`, width),
@@ -185,15 +183,6 @@ export class DiffReviewComponent implements Component {
       lines.push(this.renderTurnRow(row, width));
     }
 
-    if (treeRows.length === 0) {
-      lines.push(
-        truncateToWidth(
-          this.theme.fg("muted", "  No diff turns match the search."),
-          width,
-        ),
-      );
-    }
-
     const detailsHeaderLines = 1;
     const detailsHeight = Math.max(
       0,
@@ -236,7 +225,7 @@ export class DiffReviewComponent implements Component {
   }
 
   private getBodyBudgetLines(): number {
-    const reservedLines = this.notice ? 11 : 10;
+    const reservedLines = this.notice ? 10 : 9;
     return Math.max(5, this.tui.terminal.rows - reservedLines);
   }
 
@@ -245,14 +234,6 @@ export class DiffReviewComponent implements Component {
     if (bodyBudget <= 7) return Math.min(rowCount, bodyBudget);
     const maxTreeHeight = Math.max(3, Math.min(10, Math.floor(bodyBudget / 3)));
     return Math.min(rowCount, maxTreeHeight);
-  }
-
-  private renderSearchLine(width: number): string {
-    const label = this.theme.fg("muted", "  Type to search:");
-    const query = this.searchQuery
-      ? ` ${this.theme.fg("accent", this.searchQuery)}`
-      : "";
-    return truncateToWidth(`${label}${query}`, width);
   }
 
   private renderDetailsHeader(width: number): string {
@@ -342,16 +323,6 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
-    if (this.keybindings.matches(data, "tui.editor.deleteCharBackward")) {
-      if (this.searchQuery) {
-        this.searchQuery = this.searchQuery.slice(0, -1);
-        this.foldedIds.clear();
-        this.invalidateTreeRows();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
     if (this.keybindings.matches(data, "app.editor.external")) {
       this.openSelectedHunk();
       this.tui.requestRender(true);
@@ -423,11 +394,6 @@ export class DiffReviewComponent implements Component {
       this.pageFocusedSelection(-1);
     } else if (matchesKey(data, "right")) {
       this.pageFocusedSelection(1);
-    } else if (isPrintableInput(data)) {
-      this.searchQuery += data;
-      this.foldedIds.clear();
-      this.invalidateTreeRows();
-      this.focus = "tree";
     } else {
       this.pendingG = false;
       return;
@@ -499,10 +465,7 @@ export class DiffReviewComponent implements Component {
 
   private buildTreeRows(): TurnRow[] {
     const rows: TurnRow[] = [];
-    const visibleTurnIds = this.getSearchVisibleTurnIds();
-    const rootIds = this.model.roots
-      .map((root) => root.id)
-      .filter((rootId) => !visibleTurnIds || visibleTurnIds.has(rootId));
+    const rootIds = this.model.roots.map((root) => root.id);
     const orderedRootIds = this.sortActiveFirst(rootIds);
     this.visibleParentById = new Map<string, string | undefined>();
     this.visibleChildrenById = new Map<string | undefined, string[]>();
@@ -521,7 +484,6 @@ export class DiffReviewComponent implements Component {
         index === orderedRootIds.length - 1,
         [],
         this.multipleVisibleRoots,
-        visibleTurnIds,
         undefined,
       );
     }
@@ -537,11 +499,8 @@ export class DiffReviewComponent implements Component {
     isLast: boolean,
     gutters: readonly Gutter[],
     isVirtualRootChild: boolean,
-    visibleTurnIds: ReadonlySet<string> | undefined,
     visibleParentId: string | undefined,
   ): void {
-    if (visibleTurnIds && !visibleTurnIds.has(turnId)) return;
-
     const turn = this.turnsById.get(turnId);
     if (!turn) return;
 
@@ -556,11 +515,7 @@ export class DiffReviewComponent implements Component {
       isVirtualRootChild,
     });
 
-    const childIds = this.sortActiveFirst(
-      (this.childrenById.get(turn.id) ?? []).filter(
-        (childId) => !visibleTurnIds || visibleTurnIds.has(childId),
-      ),
-    );
+    const childIds = this.sortActiveFirst(this.childrenById.get(turn.id) ?? []);
     this.visibleChildrenById.set(turnId, childIds);
     if (this.foldedIds.has(turn.id)) return;
 
@@ -591,7 +546,6 @@ export class DiffReviewComponent implements Component {
         index === childIds.length - 1,
         childGutters,
         false,
-        visibleTurnIds,
         turn.id,
       );
     }
@@ -665,50 +619,6 @@ export class DiffReviewComponent implements Component {
       }
     }
     return rows;
-  }
-
-  private getSearchVisibleTurnIds(): ReadonlySet<string> | undefined {
-    const tokens = this.searchQuery.toLowerCase().split(/\s+/u).filter(Boolean);
-    if (tokens.length === 0) return undefined;
-
-    const visible = new Set<string>();
-    for (const turn of this.turnsById.values()) {
-      const searchableText = this.getSearchableText(turn).toLowerCase();
-      if (!tokens.every((token) => searchableText.includes(token))) continue;
-      this.addTurnAndAncestors(visible, turn.id);
-    }
-    return visible;
-  }
-
-  private addTurnAndAncestors(target: Set<string>, turnId: string): void {
-    let currentId: string | undefined = turnId;
-    while (currentId) {
-      target.add(currentId);
-      currentId = this.parentById.get(currentId);
-    }
-  }
-
-  private getSearchableText(turn: ReviewTurn): string {
-    const fileText = turn.files
-      .map((file) =>
-        [
-          file.path,
-          `+${file.additions}`,
-          `-${file.removals}`,
-          file.hunks
-            .map((hunk) =>
-              [
-                hunk.path,
-                hunk.header,
-                String(hunk.jumpLine),
-                hunk.bodyLines.join("\n"),
-              ].join(" "),
-            )
-            .join(" "),
-        ].join(" "),
-      )
-      .join(" ");
-    return `${this.turnLabel(turn)} ${turn.prompt} ${fileText}`;
   }
 
   private renderTurnRow(row: TurnRow, width: number): string {
@@ -1264,14 +1174,6 @@ function isSelectableDetailRow(row: DetailRow): row is SelectableDetailRow {
 
 function isFileDetailRow(row: DetailRow): row is FileDetailRow {
   return row.kind === "file";
-}
-
-function isPrintableInput(data: string): boolean {
-  if (data.length === 0) return false;
-  return ![...data].some((char) => {
-    const code = char.charCodeAt(0);
-    return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
-  });
 }
 
 interface ParsedDiffLine {
