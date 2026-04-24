@@ -34,15 +34,13 @@ const keybindings = {
 } as unknown as KeybindingsManager;
 
 describe("DiffReviewComponent", () => {
-  it("renders hunk labels from structured fields instead of parsing hunk.header", () => {
+  it("renders hunk labels from structured fields", () => {
     const model = buildReviewModel({
       files: [
         {
           path: "src/a.ts",
           hunks: [
             {
-              header:
-                "lines 99-100  staged metadata that must not drive rendering",
               jumpLine: 10,
               newLines: 3,
               additions: 2,
@@ -57,8 +55,6 @@ describe("DiffReviewComponent", () => {
     const rendered = renderModel(model);
 
     expect(rendered).toContain("lines 10-12  edit  +2 -1 src/a.ts");
-    expect(rendered).not.toContain("99-100");
-    expect(rendered).not.toContain("staged metadata");
   });
 
   it("renders a singular hunk region from structured fields", () => {
@@ -68,7 +64,6 @@ describe("DiffReviewComponent", () => {
           path: "src/a.ts",
           hunks: [
             {
-              header: "garbage header that should be ignored",
               jumpLine: 7,
               newLines: 1,
               additions: 1,
@@ -83,7 +78,6 @@ describe("DiffReviewComponent", () => {
     const rendered = renderModel(model);
 
     expect(rendered).toContain("line 7  write  +1 -0 src/a.ts");
-    expect(rendered).not.toContain("garbage header");
   });
 
   it("renders summary, turn, file, and hunk behavior text", () => {
@@ -280,7 +274,6 @@ function countOccurrences(text: string, search: string): number {
 }
 
 interface TestHunk {
-  header?: string;
   jumpLine: number;
   newLines: number;
   additions: number;
@@ -418,9 +411,6 @@ function buildReviewTurn({
       newStart: hunk.jumpLine,
       newLines: hunk.newLines,
       jumpLine: hunk.jumpLine,
-      header:
-        hunk.header ??
-        `${hunk.newLines === 1 ? "line" : "lines"} ${hunk.jumpLine}  ${hunk.toolName}  (+${hunk.additions} -${hunk.removals})`,
       bodyLines: [`+${hunk.jumpLine} changed`],
       additions: hunk.additions,
       removals: hunk.removals,

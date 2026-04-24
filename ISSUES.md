@@ -11,7 +11,16 @@ Track follow-up items from the review of `9164cdc` (`style: improve diff metadat
   - **How to verify:** Change or construct a hunk header with extra leading metadata, e.g. `"new lines 10-12  edit  (+2 -1)"` or `"lines 10-12  staged  edit  (+2 -1)"`, then render the UI. The current renderer only preserves the substring its regex understands and appends separate tool/stats, proving the rendering boundary is confused.
   - **Smallest acceptable fix:** Render `hunk.header` verbatim, or build all hunk label parts from structured `ReviewHunk` fields (`jumpLine`, `newLines`, `toolName`, `additions`, `removals`, etc.) without parsing the human-facing header string.
   - **Required test:** Renderer behavior test proving hunk label rendering does not lose custom/extra header metadata and does not mix inconsistent header/tool/stat sources.
-  - **Fixed in working tree:** `DiffReviewComponent` now formats hunk regions from structured `ReviewHunk` fields instead of parsing `hunk.header`; `test/diff-review-ui.test.ts` verifies custom/garbage headers do not drive rendering.
+  - **Fixed in working tree:** `DiffReviewComponent` now formats hunk regions from structured `ReviewHunk` fields instead of parsing `hunk.header`; follow-up cleanup removed `ReviewHunk.header` entirely so there is no display-header field to parse.
+
+- [x] **Remove obsolete `ReviewHunk.header` display state.**
+  - **Location:** `src/diff/model.ts`, `test/diff-review-ui.test.ts`
+  - **Context:** After the renderer stopped reading `hunk.header`, the model still exposed and populated `ReviewHunk.header` via `formatHunkHeader()`. That left a duplicate display string next to the structured fields that actually drive hunk labels.
+  - **Why this is an issue:** Keeping stale display state invites future code to start parsing or trusting `hunk.header` again. It also keeps model/render ownership confused: the model was still formatting UI labels even though the renderer owns the colored label.
+  - **How to verify:** Run `rg -n "\\.header|header:|formatHunkHeader|header\\?" src test`. There should be no source/test usage of hunk header fields or header formatting helpers.
+  - **Smallest acceptable fix:** Delete `ReviewHunk.header`, remove `header:` assignments from edit/write hunk construction, remove `formatHunkHeader()`, and update tests to construct hunks only from structured fields.
+  - **Required test:** Existing renderer tests must still pass and verify hunk labels render correctly from `jumpLine`, `newLines`, `toolName`, `additions`, and `removals`.
+  - **Fixed in working tree:** `ReviewHunk.header` and `formatHunkHeader()` were removed; renderer tests now build hunks without any header string.
 
 - [x] **Add behavior-level renderer coverage for the changed UI output.**
   - **Location:** `test/diff-review-ui.test.ts`
@@ -29,11 +38,11 @@ Track follow-up items from the review of `9164cdc` (`style: improve diff metadat
   - **Context:** `formatHunkRegion()` parses the exact string shape emitted by `formatHunkHeader()` in `src/diff/model.ts:563-574`.
   - **Why this smells:** This is hidden coupling between renderer and model display formatting. It will rot quickly when hunk metadata gets richer.
   - **How to verify:** Compare the regex in `formatHunkRegion()` with the string emitted by `formatHunkHeader()`. They are coupled by convention only; TypeScript cannot protect this.
-  - **Fixed in working tree:** `formatHunkRegion()` no longer accepts a header string or uses regex; it accepts `ReviewHunk` and derives `line` / `lines` from `jumpLine` and `newLines`.
+  - **Fixed in working tree:** `formatHunkRegion()` no longer accepts a header string or uses regex; it accepts `ReviewHunk` and derives `line` / `lines` from `jumpLine` and `newLines`. Follow-up cleanup removed `ReviewHunk.header` and `formatHunkHeader()` from the model.
 
 ## Concrete missing tests
 
-- [x] Renderer test for hunk rows with `line 7`, `lines 7-9`, and malformed/custom header text.
+- [x] Renderer test for hunk rows with `line 7` and `lines 7-9`; malformed/custom header coverage became obsolete after `ReviewHunk.header` was removed.
 - [x] Renderer test for pluralization: `1 hunk` vs `2 hunks`, `1 file` vs `2 files`.
 - [x] Renderer test for summary totals with additions/removals split across color segments.
 - [x] Renderer test for selected and unselected detail rows without asserting raw ANSI escape implementation details.

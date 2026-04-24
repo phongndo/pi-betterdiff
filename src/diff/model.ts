@@ -21,7 +21,6 @@ export interface ReviewHunk extends DiffStats {
   newStart: number | undefined;
   newLines: number | undefined;
   jumpLine: number;
-  header: string;
   bodyLines: string[];
 }
 
@@ -446,7 +445,6 @@ function hunksFromWrite(
       newStart: 1,
       newLines: allLines.length,
       jumpLine: 1,
-      header: formatHunkHeader(1, allLines.length, additions, 0, "write"),
       bodyLines,
       additions,
       removals: 0,
@@ -553,25 +551,10 @@ function segmentToHunk(
     newStart,
     newLines,
     jumpLine,
-    header: formatHunkHeader(jumpLine, newLines, additions, removals, "edit"),
     bodyLines: segment,
     additions,
     removals,
   };
-}
-
-function formatHunkHeader(
-  jumpLine: number,
-  newLineCount: number | undefined,
-  additions: number,
-  removals: number,
-  toolName: "edit" | "write",
-): string {
-  const end =
-    newLineCount && newLineCount > 1 ? jumpLine + newLineCount - 1 : jumpLine;
-  const lineLabel =
-    end === jumpLine ? `line ${jumpLine}` : `lines ${jumpLine}-${end}`;
-  return `${lineLabel}  ${toolName}  (+${additions} -${removals})`;
 }
 
 function rangeLength(
