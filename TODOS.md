@@ -4,13 +4,13 @@ Feature goals for future BetterDiff diff modes and navigation/search capabilitie
 
 ## Diff type goals
 
-- [ ] **Session turn-by-turn diff**
+- [x] **Session turn-by-turn diff**
   - **User goal:** Show what the agent changed, grouped by user turn.
   - **Primary command/use case:** Default `/diff` behavior.
   - **Data source:** pi session tree mutation history from `edit` and `write` tool results.
   - **Comparison meaning:** Not an endpoint comparison. This is a chronological/session-tree review of mutations produced by assistant responses.
   - **Grouping:** Diff-producing user turns, arranged by compressed pi session ancestry.
-  - **UI label:** Make the mode explicit, e.g. `Session turns` or `Turn-by-turn session diff`.
+  - **UI label:** `Session turns`.
   - **Expected content:**
     - user prompt preview for each changed turn
     - changed files under the selected turn
@@ -24,6 +24,109 @@ Feature goals for future BetterDiff diff modes and navigation/search capabilitie
     - `write` previews that are truncated
     - turns with edits on inactive branches
   - **Definition of done:** The current session review remains usable as the default mode and clearly says it is reviewing session turns.
+
+- [x] **Git changes diff: staged above unstaged**
+  - **User goal:** Review all local git changes in one BetterDiff page while clearly separating what is staged from what is unstaged.
+  - **Primary command/use case:** `/diff git`, `/diff changes`, or selecting `Git changes` from the in-UI mode menu.
+  - **Data sources:**
+    - staged section: `git diff --cached` / `git diff --staged`
+    - unstaged section: `git diff`
+  - **Comparison meaning:**
+    - staged section: Git index compared against `HEAD`
+    - unstaged section: working tree compared against the git index
+  - **Grouping:** Two top-level tree rows, with `Staged changes — HEAD → index` above `Unstaged changes — index → working tree`.
+  - **UI label:** `Git changes`.
+  - **Expected content:**
+    - staged files/hunks/diff body lines in the staged section only
+    - unstaged files/hunks/diff body lines in the unstaged section only
+    - additions/removals scoped to each section and totaled for the mode
+    - clear empty state when neither staged nor unstaged changes exist
+  - **Important edge cases:**
+    - no staged changes but unstaged changes exist
+    - staged changes but no unstaged changes exist
+    - file has both staged and unstaged changes
+    - newly added files
+    - deleted tracked files
+    - renamed files
+    - mode-only changes
+    - binary files
+    - paths with spaces
+  - **Definition of done:** Staged and unstaged changes are reviewed on one page, with staged changes clearly grouped above unstaged changes and no mixing with session mutation history.
+
+- [x] **Current branch -> main/master diff**
+  - **User goal:** Quickly review what the current branch introduces relative to the repository's default/main branch.
+  - **Primary command/use case:** `/diff branch` or selecting `Current branch vs main/master` from the in-UI mode menu.
+  - **Data source:** Git diff between an auto-detected base ref and `HEAD`.
+  - **Base ref detection order:**
+    - `origin/HEAD`
+    - `main`
+    - `master`
+    - `origin/main`
+    - `origin/master`
+  - **Comparison meaning:** PR-style merge-base comparison, `<base>...HEAD`, i.e. `merge-base(base, current) -> current`.
+  - **UI label:** `Current branch vs <base>` with `merge-base(<base>, <current>) → <current>`.
+  - **Expected content:**
+    - detected base ref label
+    - current branch/ref label
+    - changed files between merge-base and current branch
+    - hunks and diff body lines
+    - additions/removals for the selected ref comparison
+  - **Important edge cases:**
+    - no main/master/default base can be detected
+    - base ref is invalid or unavailable locally
+    - no common ancestor
+    - renamed files
+    - deleted files
+    - binary files
+    - very large diffs
+  - **Definition of done:** The user can launch a one-step PR-style current-branch review against main/master and tell exactly which base/current refs and semantics are being used.
+
+- [x] **Current branch -> selected branch/ref diff**
+  - **User goal:** Compare the current branch against any selected base branch/ref.
+  - **Primary command/use case:** Select `Current branch vs selected branch…` from the in-UI mode menu, or use `/diff branch <base-ref>`.
+  - **Data source:** Git diff between the selected base ref and `HEAD`.
+  - **Comparison meaning:** PR-style merge-base comparison, `<base>...HEAD`, i.e. `merge-base(base, current) -> current`.
+  - **UI label:** `Current branch vs <base>` with `merge-base(<base>, <current>) → <current>`.
+  - **Expected content:**
+    - selectable base branch/ref list from local branches, remote branches, and tags
+    - selected base ref label
+    - current branch/ref label
+    - changed files between merge-base and current branch
+    - hunks and diff body lines
+    - additions/removals for the selected ref comparison
+  - **Important edge cases:**
+    - invalid selected ref
+    - no branches/refs are available to select
+    - selected ref has no common ancestor with current branch
+    - renamed files
+    - deleted files
+    - binary files
+    - very large diffs
+  - **Definition of done:** The user can choose a base branch/ref and review a clearly labeled PR-style diff against the current branch.
+
+- [ ] **Arbitrary git ref -> git ref diff**
+  - **User goal:** Compare any two git refs, not necessarily involving the current branch.
+  - **Primary command/use case:** User selects or enters both left/base and right/target refs.
+  - **Data source:** Git diff between two validated refs.
+  - **Comparison meaning:** Product still needs an advanced-mode decision or toggle for two-dot vs three-dot semantics:
+    - two-dot: direct endpoint difference, `<left>..<right>`
+    - three-dot: merge-base to right side, `<left>...<right>`
+  - **UI label:** Make the selected refs and semantics explicit, e.g. `Git branch diff: <left>...<right>` or `Git branch diff: <left>..<right>`.
+  - **Expected content:**
+    - left/base ref label
+    - right/target ref label
+    - comparison semantics label
+    - changed files between refs
+    - hunks and diff body lines
+    - additions/removals for the selected ref comparison
+  - **Important edge cases:**
+    - invalid ref names
+    - refs with no common ancestor if three-dot semantics are used
+    - renamed files
+    - deleted files
+    - binary files
+    - very large diffs
+  - **Definition of done:** The user can tell exactly which refs are being compared and what comparison semantics are being used.
 
 - [ ] **Session branch -> session branch diff**
   - **User goal:** Compare the resulting file state at one pi session branch endpoint against another pi session branch endpoint.
@@ -45,70 +148,6 @@ Feature goals for future BetterDiff diff modes and navigation/search capabilitie
     - `write` overwrites where before/after state is incomplete
     - binary or non-text files
   - **Definition of done:** The UI clearly distinguishes branch endpoint comparison from turn-by-turn history review and does not present incomplete reconstruction as an exact diff.
-
-- [x] **Git staged diff**
-  - **User goal:** Show changes currently staged for commit.
-  - **Primary command/use case:** Review the git index before committing, in the combined Git changes page.
-  - **Data source:** `git diff --cached` / `git diff --staged`.
-  - **Comparison meaning:** Git index compared against `HEAD`.
-  - **UI label:** Shown as the `Staged changes — HEAD → index` section under `Git changes`.
-  - **Expected content:**
-    - files staged for commit
-    - staged hunks and diff body lines
-    - additions/removals for staged content only
-    - clear empty state when nothing is staged
-  - **Important edge cases:**
-    - no staged changes
-    - newly added files
-    - deleted files
-    - renamed files
-    - mode-only changes
-    - binary files
-    - paths with spaces
-  - **Definition of done:** Staged changes are grouped separately above unstaged working-tree changes in the combined Git changes view.
-
-- [x] **Git unstaged diff**
-  - **User goal:** Show working tree changes that have not been staged.
-  - **Primary command/use case:** Review local edits before staging them, in the combined Git changes page.
-  - **Data source:** `git diff`.
-  - **Comparison meaning:** Working tree compared against the git index.
-  - **UI label:** Shown as the `Unstaged changes — index → working tree` section under `Git changes`.
-  - **Expected content:**
-    - modified tracked files with unstaged changes
-    - unstaged hunks and diff body lines
-    - additions/removals for unstaged content only
-    - clear empty state when nothing is unstaged
-  - **Important edge cases:**
-    - no unstaged changes
-    - file has both staged and unstaged changes
-    - deleted tracked files
-    - binary files
-    - paths with spaces
-  - **Definition of done:** Unstaged changes are grouped separately below staged changes in the combined Git changes view without mixing with session mutation history.
-
-- [x] **Git branch/ref -> current branch diff**
-  - **User goal:** Compare the current branch against a base ref, usually main/master or another selected branch.
-  - **Primary command/use case:** Review differences such as `main -> current branch`, `origin/main -> current branch`, or `release/1.0 -> current branch`.
-  - **Data source:** git diff between validated refs.
-  - **Comparison meaning:** PR-style merge-base comparison, `<base>...HEAD`, i.e. `merge-base(base, current) -> current`.
-  - **UI label:** Makes the selected refs explicit, e.g. `Current branch vs <base>` with `merge-base(<base>, <current>) → <current>`.
-  - **Required product decision:** Use three-dot semantics for this mode:
-    - three-dot: merge-base to current branch, `<base>...HEAD`
-    - two-dot direct endpoint comparison is left for a future advanced branch/ref mode.
-  - **Expected content:**
-    - base ref label
-    - current branch/ref label
-    - changed files between refs
-    - hunks and diff body lines
-    - additions/removals for the selected ref comparison
-  - **Important edge cases:**
-    - invalid ref names
-    - refs with no common ancestor if three-dot semantics are used
-    - renamed files
-    - deleted files
-    - binary files
-    - very large diffs
-  - **Definition of done:** The user can tell exactly which refs are being compared and that merge-base / PR-style semantics are being used.
 
 ## Search and grep goals
 
