@@ -30,33 +30,16 @@ export default function betterDiffExtension(pi: ExtensionAPI): void {
       ctx.sessionManager.getTree(),
       ctx.sessionManager.getLeafId(),
     );
-    const result = await ctx.ui.custom<DiffReviewAction>(
-      (tui, theme, keybindings, done) => {
-        return new DiffReviewComponent(
-          model,
-          ctx.cwd,
-          tui,
-          theme,
-          keybindings,
-          done,
-        );
-      },
-    );
-
-    if (result.type === "undo") {
-      const confirmed = await ctx.ui.confirm(
-        "Undo to turn?",
-        `Navigate back to before ${result.label}? The original prompt will be restored to the editor so you can edit or resubmit it.`,
+    await ctx.ui.custom<DiffReviewAction>((tui, theme, keybindings, done) => {
+      return new DiffReviewComponent(
+        model,
+        ctx.cwd,
+        tui,
+        theme,
+        keybindings,
+        done,
       );
-      if (!confirmed) return;
-
-      const navigation = await ctx.navigateTree(result.targetEntryId, {
-        summarize: false,
-      });
-      if (!navigation.cancelled) {
-        ctx.ui.notify(`Rewound to ${result.label}.`, "info");
-      }
-    }
+    });
   }
 
   pi.registerCommand("diff", {

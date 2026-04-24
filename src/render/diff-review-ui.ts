@@ -22,9 +22,7 @@ import type {
   ReviewTurn,
 } from "../diff/model.js";
 
-export type DiffReviewAction =
-  | { type: "close" }
-  | { type: "undo"; targetEntryId: string; label: string };
+export type DiffReviewAction = { type: "close" };
 
 type FocusMode = "tree" | "details";
 
@@ -47,6 +45,7 @@ interface FileDetailRow {
   id: string;
   kind: "file";
   selectable: true;
+  prefix: string;
   file: ReviewFile;
 }
 
@@ -54,6 +53,7 @@ interface HunkDetailRow {
   id: string;
   kind: "hunk";
   selectable: true;
+  prefix: string;
   file: ReviewFile;
   hunk: ReviewHunk;
 }
@@ -62,6 +62,7 @@ interface DiffDetailRow {
   id: string;
   kind: "diff";
   selectable: true;
+  prefix: string;
   file: ReviewFile;
   hunk: ReviewHunk;
   text: string;
@@ -77,6 +78,7 @@ export class DiffReviewComponent implements Component {
   private readonly activeTurnIds = new Set<string>();
   private readonly activeDescendantMemo = new Map<string, boolean>();
   private readonly foldedIds = new Set<string>();
+  private readonly foldedDetailIds = new Set<string>();
   private visibleParentById = new Map<string, string | undefined>();
   private visibleChildrenById = new Map<string | undefined, string[]>();
   private multipleVisibleRoots = false;
@@ -102,6 +104,7 @@ export class DiffReviewComponent implements Component {
     private readonly done: (result: DiffReviewAction) => void,
   ) {
     this.indexModel();
+    this.foldDetailHunksByDefault();
     this.selectedTurnId = this.firstSelectableTurnId();
   }
 
@@ -366,17 +369,6 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
-    if (data === "u" || data === "U") {
-      const turn = this.getSelectedTurn();
-      if (!turn) return;
-      this.done({
-        type: "undo",
-        targetEntryId: turn.userEntryId,
-        label: this.turnLabel(turn),
-      });
-      return;
-    }
-
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       this.moveFocusedSelection(-1);
     } else if (
@@ -392,7 +384,7 @@ export class DiffReviewComponent implements Component {
       if (this.focus === "tree") {
         this.focusDetails();
       } else {
-        this.openSelectedHunk();
+        this.confirmDetailSelection();
       }
     } else if (
       data === "h" ||
@@ -413,9 +405,17 @@ export class DiffReviewComponent implements Component {
         this.focusDetails();
       }
     } else if (data === "c" || data === "C") {
-      this.collapseAllBranches();
+      if (this.focus === "details") {
+        this.collapseAllDetails();
+      } else {
+        this.collapseAllBranches();
+      }
     } else if (data === "e" || data === "E") {
-      this.expandAllBranches();
+      if (this.focus === "details") {
+        this.expandAllDetails();
+      } else {
+        this.expandAllBranches();
+      }
     } else if (data === "]" || data === "[") {
       this.setPendingBracket(data);
       this.pendingG = false;
@@ -460,6 +460,16 @@ export class DiffReviewComponent implements Component {
     for (const turn of this.model.turns) {
       if (!this.turnsById.has(turn.id)) {
         this.addTurnAndChildren(turn, undefined);
+      }
+    }
+  }
+
+  private foldDetailHunksByDefault(): void {
+    for (const turn of this.model.turns) {
+      for (const file of turn.files) {
+        for (const hunk of file.hunks) {
+          this.foldedDetailIds.add(hunk.id);
+        }
       }
     }
   }
@@ -623,26 +633,40 @@ export class DiffReviewComponent implements Component {
     if (!turn) return [];
 
     const rows: DetailRow[] = [];
-    for (const file of turn.files) {
+    for (let fileIndex = 0; fileIndex < turn.files.length; fileIndex++) {
+      const file = turn.files[fileIndex];
+      if (!file) continue;
       rows.push({
         id: file.id,
         kind: "file",
         selectable: true,
+        prefix: "",
         file,
       });
-      for (const hunk of file.hunks) {
+      if (this.foldedDetailIds.has(file.id)) continue;
+
+      for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
+        const hunk = file.hunks[hunkIndex];
+        if (!hunk) continue;
+        const hunkIsLast = hunkIndex === file.hunks.length - 1;
+        const hunkPrefix = hunkIsLast ? "└─ " : "├─ ";
         rows.push({
           id: hunk.id,
           kind: "hunk",
           selectable: true,
+          prefix: hunkPrefix,
           file,
           hunk,
         });
+        if (this.foldedDetailIds.has(hunk.id)) continue;
+
+        const diffPrefix = hunkIsLast ? "   " : "│  ";
         for (let index = 0; index < hunk.bodyLines.length; index++) {
           rows.push({
             id: `${hunk.id}:line:${index}`,
             kind: "diff",
             selectable: true,
+            prefix: diffPrefix,
             file,
             hunk,
             text: hunk.bodyLines[index] ?? "",
@@ -760,18 +784,30 @@ export class DiffReviewComponent implements Component {
     const selected = row.selectable && row.id === this.selectedDetailId;
     const focused = selected && this.focus === "details";
     const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
+    const prefix = this.theme.fg("dim", row.prefix);
     let content: string;
     if (row.kind === "file") {
-      content = `  ${this.theme.fg("toolTitle", row.file.path)} ${this.statText(row.file)} ${this.theme.fg("muted", `${row.file.hunks.length} hunk${row.file.hunks.length === 1 ? "" : "s"}`)}`;
+      content = `${this.detailFoldMarker(row)}${this.theme.fg("toolTitle", row.file.path)} ${this.statText(row.file)} ${this.theme.fg("muted", `${row.file.hunks.length} hunk${row.file.hunks.length === 1 ? "" : "s"}`)}`;
     } else if (row.kind === "hunk") {
-      content = `    ${this.theme.fg("borderAccent", row.hunk.header)} ${this.theme.fg("dim", row.hunk.path)}`;
+      content = `${this.detailFoldMarker(row)}${this.theme.fg("borderAccent", row.hunk.header)} ${this.theme.fg("dim", row.hunk.path)}`;
     } else {
-      content = `      ${this.renderDiffLine(row.text, row.hunk.path)}`;
+      content = `  ${this.renderDiffLine(row.text, row.hunk.path)}`;
     }
 
-    let line = cursor + content;
+    let line = cursor + prefix + content;
     if (focused) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width);
+  }
+
+  private detailFoldMarker(row: FileDetailRow | HunkDetailRow): string {
+    const hasChildren =
+      row.kind === "file"
+        ? row.file.hunks.length > 0
+        : row.hunk.bodyLines.length > 0;
+    if (!hasChildren) return "  ";
+    return this.foldedDetailIds.has(row.id)
+      ? this.theme.fg("accent", "⊞ ")
+      : this.theme.fg("accent", "⊟ ");
   }
 
   private renderDiffLine(line: string, filePath: string): string {
@@ -847,22 +883,23 @@ export class DiffReviewComponent implements Component {
   }
 
   private moveToHunk(delta: number): void {
-    const hunks = this.getDetailRows().filter(isHunkDetailRow);
+    const hunks = this.getAllHunksForSelectedTurn();
     if (hunks.length === 0) return;
     const selectedHunkId = this.findHunkForDetailRow(
       this.getSelectedDetailRow(),
     )?.id;
-    const currentIndex = hunks.findIndex(
-      (row) => row.hunk.id === selectedHunkId,
-    );
+    const currentIndex = hunks.findIndex((hunk) => hunk.id === selectedHunkId);
     const nextIndex =
       currentIndex === -1
         ? delta > 0
           ? 0
           : hunks.length - 1
         : clamp(currentIndex + delta, 0, hunks.length - 1);
+    const hunk = hunks[nextIndex];
+    if (!hunk) return;
+    this.foldedDetailIds.delete(hunk.fileId);
     this.focus = "details";
-    this.selectedDetailId = hunks[nextIndex]?.id;
+    this.selectedDetailId = hunk.id;
   }
 
   private moveToFile(delta: number): void {
@@ -885,13 +922,30 @@ export class DiffReviewComponent implements Component {
 
   private moveDetailParentOrTree(): void {
     const selectedRow = this.getSelectedDetailRow();
-    if (!selectedRow || selectedRow.kind === "file") {
+    if (!selectedRow) {
       this.focus = "tree";
       return;
     }
 
-    this.selectedDetailId =
-      selectedRow.kind === "hunk" ? selectedRow.file.id : selectedRow.hunk.id;
+    if (selectedRow.kind === "file") {
+      if (this.isDetailExpanded(selectedRow)) {
+        this.foldedDetailIds.add(selectedRow.id);
+      } else {
+        this.focus = "tree";
+      }
+      return;
+    }
+
+    if (selectedRow.kind === "hunk") {
+      if (this.isDetailExpanded(selectedRow)) {
+        this.foldedDetailIds.add(selectedRow.id);
+      } else {
+        this.selectedDetailId = selectedRow.file.id;
+      }
+      return;
+    }
+
+    this.selectedDetailId = selectedRow.hunk.id;
   }
 
   private moveDetailChild(): void {
@@ -899,16 +953,59 @@ export class DiffReviewComponent implements Component {
     if (!selectedRow) return;
 
     if (selectedRow.kind === "file") {
+      if (this.foldedDetailIds.has(selectedRow.id)) {
+        this.foldedDetailIds.delete(selectedRow.id);
+        return;
+      }
       this.selectedDetailId = selectedRow.file.hunks[0]?.id ?? selectedRow.id;
       return;
     }
 
     if (selectedRow.kind === "hunk") {
+      if (this.foldedDetailIds.has(selectedRow.id)) {
+        this.foldedDetailIds.delete(selectedRow.id);
+        return;
+      }
       this.selectedDetailId =
         selectedRow.hunk.bodyLines.length > 0
           ? `${selectedRow.hunk.id}:line:0`
           : selectedRow.id;
     }
+  }
+
+  private confirmDetailSelection(): void {
+    const selectedRow = this.getSelectedDetailRow();
+    if (!selectedRow) return;
+    if (selectedRow.kind === "diff") {
+      this.openSelectedHunk();
+      return;
+    }
+    this.toggleDetailFold(selectedRow);
+  }
+
+  private toggleDetailFold(row: FileDetailRow | HunkDetailRow): void {
+    if (!this.isDetailFoldable(row)) return;
+    if (this.foldedDetailIds.has(row.id)) {
+      this.foldedDetailIds.delete(row.id);
+    } else {
+      this.foldedDetailIds.add(row.id);
+    }
+  }
+
+  private isDetailExpanded(row: FileDetailRow | HunkDetailRow): boolean {
+    return this.isDetailFoldable(row) && !this.foldedDetailIds.has(row.id);
+  }
+
+  private isDetailFoldable(row: FileDetailRow | HunkDetailRow): boolean {
+    return row.kind === "file"
+      ? row.file.hunks.length > 0
+      : row.hunk.bodyLines.length > 0;
+  }
+
+  private getAllHunksForSelectedTurn(): ReviewHunk[] {
+    const turn = this.getSelectedTurn();
+    if (!turn) return [];
+    return turn.files.flatMap((file) => file.hunks);
   }
 
   private selectFocusedFirst(): void {
@@ -984,6 +1081,28 @@ export class DiffReviewComponent implements Component {
   private expandAllBranches(): void {
     this.foldedIds.clear();
     this.invalidateTreeRows();
+  }
+
+  private collapseAllDetails(): void {
+    const turn = this.getSelectedTurn();
+    if (!turn) return;
+    for (const file of turn.files) {
+      this.foldedDetailIds.add(file.id);
+      for (const hunk of file.hunks) {
+        this.foldedDetailIds.add(hunk.id);
+      }
+    }
+  }
+
+  private expandAllDetails(): void {
+    const turn = this.getSelectedTurn();
+    if (!turn) return;
+    for (const file of turn.files) {
+      this.foldedDetailIds.delete(file.id);
+      for (const hunk of file.hunks) {
+        this.foldedDetailIds.delete(hunk.id);
+      }
+    }
   }
 
   private toggleFocus(): void {
@@ -1150,7 +1269,7 @@ export class DiffReviewComponent implements Component {
   }
 
   private describeTurn(turn: ReviewTurn): string {
-    return `${this.turnLabel(turn)} • u to undo to this turn`;
+    return this.turnLabel(turn);
   }
 }
 
@@ -1160,10 +1279,6 @@ function isSelectableDetailRow(row: DetailRow): row is SelectableDetailRow {
 
 function isFileDetailRow(row: DetailRow): row is FileDetailRow {
   return row.kind === "file";
-}
-
-function isHunkDetailRow(row: DetailRow): row is HunkDetailRow {
-  return row.kind === "hunk";
 }
 
 function isPrintableInput(data: string): boolean {

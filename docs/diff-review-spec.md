@@ -235,7 +235,7 @@ Implemented in the first UI pass:
 - branch-aware diff-producing turn tree
 - selected-turn details for files, hunks, and diff body lines
 - fold/expand navigation for tree branches
-- turn rewind via `ctx.navigateTree()`
+- review-only behavior; branch navigation/rewind stays in pi's native `/tree`
 - `ctrl+g` external-editor jump to the selected hunk line
 
 Still to harden:
