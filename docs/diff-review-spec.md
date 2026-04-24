@@ -107,8 +107,8 @@ The navigator should support vim-like motions by default.
 
 - `j` / `k` — move selection down / up in the focused pane
 - `enter` / `tab` — move from the turn tree into selected-turn diff details; return to tree with `tab` or `esc`
-- `h` — collapse current tree item or return from details to tree
-- `l` — expand current tree item, move into a child branch, or enter details when there is no child branch
+- `h` — collapse current tree item, or move from diff line → hunk → file → tree in details
+- `l` — expand current tree item, move into a child branch, enter details, or move from file → hunk → diff line in details
 - `gg` — jump to top
 - `G` — jump to bottom
 - `enter` — focus selected turn details, or open the selected detail hunk
@@ -117,6 +117,7 @@ The navigator should support vim-like motions by default.
 ### Nice-to-have motions
 
 - `[` / `]` — previous / next hunk
+- `[f` / `]f` — previous / next changed file in the selected turn details
 - `/` or type-to-search — search by prompt, file path, or diff text
 - `n` / `N` — next / previous search result
 - `zc` / `zo` / `za` style fold helpers if they fit naturally
@@ -131,7 +132,7 @@ Arrow keys should also work so the UI stays usable without vim muscle memory.
 
 - `ctrl+g`
 
-When the cursor is on a diff hunk, `ctrl+g` should:
+When the cursor is on a changed file, diff hunk, or diff line, `ctrl+g` should:
 
 1. open the relevant file in the external editor
 2. jump to the exact changed region or best-available line anchor

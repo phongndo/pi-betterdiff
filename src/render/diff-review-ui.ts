@@ -46,7 +46,7 @@ interface TurnRow {
 interface FileDetailRow {
   id: string;
   kind: "file";
-  selectable: false;
+  selectable: true;
   file: ReviewFile;
 }
 
@@ -68,7 +68,7 @@ interface DiffDetailRow {
 }
 
 type DetailRow = FileDetailRow | HunkDetailRow | DiffDetailRow;
-type SelectableDetailRow = HunkDetailRow | DiffDetailRow;
+type SelectableDetailRow = FileDetailRow | HunkDetailRow | DiffDetailRow;
 
 export class DiffReviewComponent implements Component {
   private readonly turnsById = new Map<string, ReviewTurn>();
@@ -89,6 +89,8 @@ export class DiffReviewComponent implements Component {
   private lastDetailsPageSize = 5;
   private searchQuery = "";
   private pendingG = false;
+  private pendingBracket: "[" | "]" | undefined;
+  private pendingBracketTimer: ReturnType<typeof setTimeout> | undefined;
   private notice: string | undefined;
 
   constructor(
@@ -124,7 +126,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→: page. enter/tab: ${this.focus === "tree" ? "diff details" : "tree"}. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. u: undo turn. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→: page. enter/tab: ${this.focus === "tree" ? "diff details" : "tree"}. [/]: hunk. [f/]f: file. ${keyText("app.tree.foldOrUp")}/${keyText("app.tree.unfoldOrDown")} or h/l: fold/branch. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -274,8 +276,55 @@ export class DiffReviewComponent implements Component {
     this.invalidateTreeRows();
   }
 
+  private setPendingBracket(bracket: "[" | "]"): void {
+    this.clearPendingBracket();
+    this.pendingBracket = bracket;
+    this.pendingBracketTimer = setTimeout(() => {
+      const pendingBracket = this.consumePendingBracket();
+      if (!pendingBracket) return;
+      this.focus = "details";
+      this.moveToHunk(pendingBracket === "]" ? 1 : -1);
+      this.tui.requestRender();
+    }, 160);
+  }
+
+  private consumePendingBracket(): "[" | "]" | undefined {
+    const pendingBracket = this.pendingBracket;
+    this.clearPendingBracket();
+    return pendingBracket;
+  }
+
+  private clearPendingBracket(): void {
+    if (this.pendingBracketTimer) {
+      clearTimeout(this.pendingBracketTimer);
+      this.pendingBracketTimer = undefined;
+    }
+    this.pendingBracket = undefined;
+  }
+
   handleInput(data: string): void {
     this.notice = undefined;
+
+    if (
+      this.pendingBracket &&
+      (this.keybindings.matches(data, "tui.select.cancel") ||
+        data === "q" ||
+        data === "Q")
+    ) {
+      this.clearPendingBracket();
+    }
+
+    const pendingBracket = this.consumePendingBracket();
+    if (pendingBracket && (data === "f" || data === "F")) {
+      this.moveToFile(pendingBracket === "]" ? 1 : -1);
+      this.pendingG = false;
+      this.tui.requestRender();
+      return;
+    }
+    if (pendingBracket) {
+      this.focus = "details";
+      this.moveToHunk(pendingBracket === "]" ? 1 : -1);
+    }
 
     if (this.keybindings.matches(data, "tui.select.cancel")) {
       if (this.searchQuery) {
@@ -350,7 +399,7 @@ export class DiffReviewComponent implements Component {
       this.keybindings.matches(data, "app.tree.foldOrUp")
     ) {
       if (this.focus === "details") {
-        this.focus = "tree";
+        this.moveDetailParentOrTree();
       } else {
         this.collapseOrMoveParent();
       }
@@ -358,19 +407,20 @@ export class DiffReviewComponent implements Component {
       data === "l" ||
       this.keybindings.matches(data, "app.tree.unfoldOrDown")
     ) {
-      if (this.focus === "tree" && !this.expandOrMoveChild()) {
+      if (this.focus === "details") {
+        this.moveDetailChild();
+      } else if (!this.expandOrMoveChild()) {
         this.focusDetails();
       }
     } else if (data === "c" || data === "C") {
       this.collapseAllBranches();
     } else if (data === "e" || data === "E") {
       this.expandAllBranches();
-    } else if (data === "]") {
-      this.focus = "details";
-      this.moveToHunk(1);
-    } else if (data === "[") {
-      this.focus = "details";
-      this.moveToHunk(-1);
+    } else if (data === "]" || data === "[") {
+      this.setPendingBracket(data);
+      this.pendingG = false;
+      this.tui.requestRender();
+      return;
     } else if (data === "G") {
       this.selectFocusedLast();
     } else if (data === "g") {
@@ -577,7 +627,7 @@ export class DiffReviewComponent implements Component {
       rows.push({
         id: file.id,
         kind: "file",
-        selectable: false,
+        selectable: true,
         file,
       });
       for (const hunk of file.hunks) {
@@ -811,7 +861,54 @@ export class DiffReviewComponent implements Component {
           ? 0
           : hunks.length - 1
         : clamp(currentIndex + delta, 0, hunks.length - 1);
+    this.focus = "details";
     this.selectedDetailId = hunks[nextIndex]?.id;
+  }
+
+  private moveToFile(delta: number): void {
+    const files = this.getDetailRows().filter(isFileDetailRow);
+    if (files.length === 0) return;
+
+    const selectedFileId = this.getSelectedDetailRow()?.file.id;
+    const currentIndex = files.findIndex(
+      (row) => row.file.id === selectedFileId,
+    );
+    const nextIndex =
+      currentIndex === -1
+        ? delta > 0
+          ? 0
+          : files.length - 1
+        : clamp(currentIndex + delta, 0, files.length - 1);
+    this.focus = "details";
+    this.selectedDetailId = files[nextIndex]?.id;
+  }
+
+  private moveDetailParentOrTree(): void {
+    const selectedRow = this.getSelectedDetailRow();
+    if (!selectedRow || selectedRow.kind === "file") {
+      this.focus = "tree";
+      return;
+    }
+
+    this.selectedDetailId =
+      selectedRow.kind === "hunk" ? selectedRow.file.id : selectedRow.hunk.id;
+  }
+
+  private moveDetailChild(): void {
+    const selectedRow = this.getSelectedDetailRow();
+    if (!selectedRow) return;
+
+    if (selectedRow.kind === "file") {
+      this.selectedDetailId = selectedRow.file.hunks[0]?.id ?? selectedRow.id;
+      return;
+    }
+
+    if (selectedRow.kind === "hunk") {
+      this.selectedDetailId =
+        selectedRow.hunk.bodyLines.length > 0
+          ? `${selectedRow.hunk.id}:line:0`
+          : selectedRow.id;
+    }
   }
 
   private selectFocusedFirst(): void {
@@ -980,6 +1077,7 @@ export class DiffReviewComponent implements Component {
     row: SelectableDetailRow | undefined,
   ): ReviewHunk | undefined {
     if (!row) return undefined;
+    if (row.kind === "file") return row.file.hunks[0];
     return row.hunk;
   }
 
@@ -1058,6 +1156,10 @@ export class DiffReviewComponent implements Component {
 
 function isSelectableDetailRow(row: DetailRow): row is SelectableDetailRow {
   return row.selectable;
+}
+
+function isFileDetailRow(row: DetailRow): row is FileDetailRow {
+  return row.kind === "file";
 }
 
 function isHunkDetailRow(row: DetailRow): row is HunkDetailRow {
