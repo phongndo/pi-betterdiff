@@ -4,6 +4,34 @@ A [pi](https://pi.dev) extension package focused on better session-diff ergonomi
 
 The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations across the current pi session tree, plus practical Git changes and branch comparison modes.
 
+## Install
+
+Install from npm:
+
+```bash
+pi install npm:pi-betterdiff
+```
+
+Install directly from GitHub:
+
+```bash
+pi install git:github.com/phongndo/pi-betterdiff
+```
+
+Install a pinned GitHub release/tag:
+
+```bash
+pi install git:github.com/phongndo/pi-betterdiff@v0.1.0
+```
+
+Try without installing:
+
+```bash
+pi -e .
+```
+
+Then use `/diff` inside pi to open the BetterDiff review UI.
+
 ## What is included
 
 - TypeScript-based pi extension package layout

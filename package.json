@@ -1,8 +1,8 @@
 {
   "name": "pi-betterdiff",
   "version": "0.1.0",
-  "private": true,
-  "description": "Tree-inspired pi extension for reviewing session file diffs by turn.",
+  "private": false,
+  "description": "Tree-inspired pi extension for reviewing session and git diffs.",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -40,10 +40,12 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.69.0",
+    "@mariozechner/pi-tui": "^0.69.0",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.5",
     "eslint": "^10.2.1",
@@ -53,5 +55,10 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.0",
     "vitest": "^4.1.5"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/phongndo/pi-betterdiff.git"
   }
 }
