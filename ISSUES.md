@@ -4,22 +4,6 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
 
 ## Open review findings from `70b17e7` (`feat: add BetterDiff search and grep`)
 
-- [ ] **Stop duplicating rendered row label logic for search.**
-  - **Location:** `src/render/diff-review-ui.ts:1438-1476`, `src/render/diff-review-ui.ts:1696-1770`
-  - **Context:** Tree search claims to search rendered BetterDiff tree labels, but searchable text is rebuilt separately in `searchableTextForTurn()`, `searchableTextForFile()`, and `searchableTextForHunk()`. That duplicates the semantic label parts already assembled by `renderTurnRow()`, `renderDetailRow()`, `formatHunkLabel()`, `fileHunkText()`, `hunkCountText()`, and `statText()`.
-  - **Why this is an issue:** The UI now has two sources of truth for what a row “means.” A future rendering change can silently drift away from search behavior. This is hidden coupling dressed up as a helper.
-  - **How to verify:** Change the hunk/file/turn label composition in rendering and observe that search still uses the old independent label recipe unless the search helpers are manually updated too.
-  - **Smallest acceptable fix:** Introduce shared plain-label helpers for turn/file/hunk rows and have both rendering and search consume those semantic parts. Rendering can add color/style around shared text; search should not own a second label model.
-  - **Required test:** Behavior tests proving search matches the actual displayed turn/file/hunk label components: prompt, stats, file count, hunk count, hunk region, tool name, path, and visible diff body lines.
-
-- [ ] **Put diff-line row ids behind one helper instead of string-splicing them in multiple places.**
-  - **Location:** `src/render/diff-review-ui.ts:1310-1318`, `src/render/diff-review-ui.ts:1666-1674`
-  - **Context:** Rendered diff rows and grep targets both manufacture ids with `${hunk.id}:line:${index}`. Grep reveal works only because both sites remember the exact same string convention.
-  - **Why this is an issue:** This is hidden coupling. A harmless-looking row id change in one place breaks grep selection/reveal in another place with no type boundary protecting it.
-  - **How to verify:** Change the diff row id format in `addDetailRows()` only, then grep for a diff-body match. The grep match can no longer select the rendered row.
-  - **Smallest acceptable fix:** Add a `diffLineRowId(hunk, index)` helper and use it everywhere row ids or search match ids are built.
-  - **Required test:** Grep a diff-body match and assert the selected rendered diff line is revealed, with row ids generated through the shared helper.
-
 - [ ] **Do not let global grep masquerade as scoped grep.**
   - **Location:** `src/render/diff-review-ui.ts:1631-1693`, `TODOS.md`
   - **Context:** The implemented `?` grep traverses the whole review model. That is valid for the completed “all-review grep bootstrap,” but the remaining product goal is scoped grep based on the currently selected turn/file/hunk/diff line.
@@ -30,11 +14,11 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
 
 - [ ] **Cover search edge cases instead of only the happy path.**
   - **Location:** `test/diff-review-ui.test.ts`
-  - **Context:** Existing tests cover basic tree search, hidden-row exclusion, hidden-content grep reveal, and grep across unrendered turns. They do not cover clearing, reopening, stale queries, backspace-to-empty, or mode switching.
-  - **Why this is an issue:** The search state machine is now another modal input path. Without edge-case tests, it will regress the first time someone touches cancel handling, action menus, mode switching, or branch folding.
-  - **How to verify:** Manually exercise escape, backspace, reopening `/` or `?`, switching modes after a search, and searching folded branch ancestors. Current tests do not pin those behaviors.
+  - **Context:** Existing tests cover basic tree search, visible label search, search cancel, hidden-row exclusion, hidden-content grep reveal, diff-body grep reveal, and grep across unrendered turns. They still do not cover reopening, stale queries, backspace-to-empty, mode switching, or folded branch ancestors.
+  - **Why this is an issue:** The search state machine is now another modal input path. Without edge-case tests, it will regress the first time someone touches action menus, mode switching, query editing, or branch folding.
+  - **How to verify:** Manually exercise backspace, reopening `/` or `?`, switching modes after a search, and searching folded branch ancestors. Current tests do not pin those behaviors.
   - **Smallest acceptable fix:** Add behavior-level input tests for the missing state transitions rather than snapshotting implementation trivia.
-  - **Required test:** Cover at least: escape clear, backspace deleting the last character and hiding the search line, reopening search after a previous query, `n` / `N` grep cycling through multiple hidden matches, search/grep after mode switching or refresh, and search through folded branch ancestors.
+  - **Required test:** Cover at least: backspace deleting the last character and hiding the search line, reopening search after a previous query, `n` / `N` grep cycling through multiple hidden matches, search/grep after mode switching or refresh, and search through folded branch ancestors.
 
 ## Suspicious open cleanup
 
@@ -60,6 +44,24 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
   - **Smallest acceptable fix:** Add one explicit search-clear path. Escape while editing search clears the search query and leaves the diff review open. Escape while a non-editing search query is active clears the query before falling through to closing the review.
   - **Required test:** Input tests proving escape clears an in-progress search without closing the review, and clears a kept search before the normal review-close behavior can run.
   - **Fixed in working tree:** `clearSearch()` now clears both edit state and query text. Cancel input while search is being edited, or while a kept search is active, clears the search and requests a render instead of closing the review. Tests cover both in-progress and kept-search escape behavior.
+
+- [x] **Stop duplicating rendered row label logic for search.**
+  - **Location:** `src/render/diff-review-ui.ts`, `test/diff-review-ui.test.ts`
+  - **Context:** Tree search claimed to search rendered BetterDiff tree labels, but searchable text was rebuilt separately in `searchableTextForTurn()`, `searchableTextForFile()`, and `searchableTextForHunk()`. That duplicated semantic label parts already assembled by the render path.
+  - **Why this was an issue:** The UI had two sources of truth for what a row meant. A future rendering change could silently drift away from search behavior.
+  - **How to verify:** Search for visible turn/file/hunk label components: prompt, stats, file count, hunk count, hunk region, tool name, and path. The selected row should be the row showing those same components.
+  - **Smallest acceptable fix:** Introduce shared plain-label helpers for turn/file/hunk rows and have both rendering and search consume those semantic parts.
+  - **Required test:** Behavior tests proving search matches the actual displayed turn/file/hunk label components.
+  - **Fixed in working tree:** Search targets now use `turnPlainText()`, `filePlainText()`, and `hunkPlainText()`, which share stat/count/region/label helpers with rendering. Tests cover searching visible turn, file, and hunk label text.
+
+- [x] **Put diff-line row ids behind one helper instead of string-splicing them in multiple places.**
+  - **Location:** `src/render/diff-review-ui.ts`, `test/diff-review-ui.test.ts`
+  - **Context:** Rendered diff rows and grep targets both manufactured ids with `${hunk.id}:line:${index}`. Grep reveal worked only because both sites remembered the exact same string convention.
+  - **Why this was an issue:** This was hidden coupling. A harmless-looking row id change in one place could break grep selection/reveal in another place with no type boundary protecting it.
+  - **How to verify:** Grep for diff-body text. The matching rendered diff line should be selected and visible.
+  - **Smallest acceptable fix:** Add a `diffLineRowId(hunk, index)` helper and use it everywhere row ids or search match ids are built.
+  - **Required test:** Grep a diff-body match and assert the selected rendered diff line is revealed.
+  - **Fixed in working tree:** `diffLineRowId()` now owns diff-line ids for row construction, search targets, and hunk expansion. Tests cover grep reveal for a unique diff body line.
 
 ## Resolved review findings from `9164cdc` (`style: improve diff metadata coloring`)
 

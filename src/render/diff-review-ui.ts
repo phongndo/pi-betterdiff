@@ -1322,7 +1322,7 @@ export class DiffReviewComponent implements Component {
         });
         for (let index = 0; index < hunk.bodyLines.length; index++) {
           rows.push({
-            id: `${hunk.id}:line:${index}`,
+            id: diffLineRowId(hunk, index),
             kind: "diff",
             selectable: true,
             turn,
@@ -1373,9 +1373,8 @@ export class DiffReviewComponent implements Component {
       this.model.mode.kind === "session-turns" && this.activeTurnIds.has(row.id)
         ? this.theme.fg("accent", "• ")
         : "";
-    const prompt = row.turn.prompt || "(empty prompt)";
-    const labelPrefix = this.turnLabelPrefix();
-    const text = `${foldMarker}${pathMarker}${labelPrefix ? this.theme.fg("accent", labelPrefix) : ""}${this.theme.fg("text", prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
+    const label = this.turnLabelParts(row.turn);
+    const text = `${foldMarker}${pathMarker}${label.prefix ? this.theme.fg("accent", label.prefix) : ""}${this.theme.fg("text", label.prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
     let line = cursor + prefix + (selected ? this.theme.bold(text) : text);
     if (selected) line = this.theme.bg("selectedBg", line);
     return truncateToWidth(line, width);
@@ -1654,7 +1653,7 @@ export class DiffReviewComponent implements Component {
         id: turn.id,
         kind: "turn",
         turn,
-        text: this.searchableTextForTurn(turn),
+        text: this.turnPlainText(turn),
       });
 
       for (const file of turn.files) {
@@ -1663,7 +1662,7 @@ export class DiffReviewComponent implements Component {
           kind: "file",
           turn,
           file,
-          text: this.searchableTextForFile(file),
+          text: this.filePlainText(file),
         });
 
         for (const hunk of file.hunks) {
@@ -1673,12 +1672,12 @@ export class DiffReviewComponent implements Component {
             turn,
             file,
             hunk,
-            text: this.searchableTextForHunk(hunk),
+            text: this.hunkPlainText(hunk),
           });
 
           for (let index = 0; index < hunk.bodyLines.length; index++) {
             matches.push({
-              id: `${hunk.id}:line:${index}`,
+              id: diffLineRowId(hunk, index),
               kind: "diff",
               turn,
               file,
@@ -1712,7 +1711,7 @@ export class DiffReviewComponent implements Component {
         id: row.id,
         kind: row.kind,
         turn: row.turn,
-        text: this.searchableTextForTurn(row.turn),
+        text: this.turnPlainText(row.turn),
       };
     }
 
@@ -1722,7 +1721,7 @@ export class DiffReviewComponent implements Component {
         kind: row.kind,
         turn: row.turn,
         file: row.file,
-        text: this.searchableTextForFile(row.file),
+        text: this.filePlainText(row.file),
       };
     }
 
@@ -1733,7 +1732,7 @@ export class DiffReviewComponent implements Component {
         turn: row.turn,
         file: row.file,
         hunk: row.hunk,
-        text: this.searchableTextForHunk(row.hunk),
+        text: this.hunkPlainText(row.hunk),
       };
     }
 
@@ -1752,28 +1751,23 @@ export class DiffReviewComponent implements Component {
     return tokens.every((token) => normalizedText.includes(token));
   }
 
-  private searchableTextForTurn(turn: ReviewTurn): string {
-    const hunkCount = turn.files.reduce(
-      (total, file) => total + file.hunks.length,
-      0,
-    );
+  private turnPlainText(turn: ReviewTurn): string {
     return [
       this.turnLabel(turn),
       this.statPlainText(turn),
-      `${turn.files.length} file${turn.files.length === 1 ? "" : "s"}`,
-      `${hunkCount} hunk${hunkCount === 1 ? "" : "s"}`,
+      this.fileHunkPlainText(turn),
     ].join(" ");
   }
 
-  private searchableTextForFile(file: ReviewFile): string {
+  private filePlainText(file: ReviewFile): string {
     return [
       file.path,
       this.statPlainText(file),
-      `${file.hunks.length} hunk${file.hunks.length === 1 ? "" : "s"}`,
+      this.hunkCountPlainText(file.hunks.length),
     ].join(" ");
   }
 
-  private searchableTextForHunk(hunk: ReviewHunk): string {
+  private hunkPlainText(hunk: ReviewHunk): string {
     return [
       this.hunkRegionText(hunk),
       hunk.toolName,
@@ -1960,7 +1954,7 @@ export class DiffReviewComponent implements Component {
 
     if (row.kind === "hunk") {
       this.selectRow(
-        row.hunk.bodyLines.length > 0 ? `${row.hunk.id}:line:0` : row.id,
+        row.hunk.bodyLines.length > 0 ? diffLineRowId(row.hunk, 0) : row.id,
       );
     }
   }
@@ -1988,7 +1982,7 @@ export class DiffReviewComponent implements Component {
       this.expandFileLevel(row.turn);
     } else if (row.kind === "hunk") {
       this.selectRow(
-        row.hunk.bodyLines.length > 0 ? `${row.hunk.id}:line:0` : row.id,
+        row.hunk.bodyLines.length > 0 ? diffLineRowId(row.hunk, 0) : row.id,
       );
     } else {
       this.selectRow(row.id);
@@ -2176,30 +2170,94 @@ export class DiffReviewComponent implements Component {
   }
 
   private statText(stats: { additions: number; removals: number }): string {
-    return `${this.theme.fg("toolDiffAdded", `+${stats.additions}`)} ${this.theme.fg("toolDiffRemoved", `-${stats.removals}`)}`;
+    const parts = this.statParts(stats);
+    return `${this.theme.fg("toolDiffAdded", parts.additions)} ${this.theme.fg("toolDiffRemoved", parts.removals)}`;
   }
 
   private statPlainText(stats: {
     additions: number;
     removals: number;
   }): string {
-    return `+${stats.additions} -${stats.removals}`;
+    return this.statParts(stats).plain;
+  }
+
+  private statParts(stats: { additions: number; removals: number }): {
+    additions: string;
+    plain: string;
+    removals: string;
+  } {
+    const additions = `+${stats.additions}`;
+    const removals = `-${stats.removals}`;
+    return {
+      additions,
+      plain: `${additions} ${removals}`,
+      removals,
+    };
   }
 
   private hunkCountText(hunkCount: number): string {
-    return `${this.theme.fg("warning", String(hunkCount))} ${this.theme.fg("muted", `hunk${hunkCount === 1 ? "" : "s"}`)}`;
+    const parts = this.countParts(hunkCount, "hunk");
+    return `${this.theme.fg("warning", parts.count)} ${this.theme.fg("muted", parts.label)}`;
+  }
+
+  private hunkCountPlainText(hunkCount: number): string {
+    return this.countParts(hunkCount, "hunk").plain;
+  }
+
+  private fileCountText(fileCount: number): string {
+    const parts = this.countParts(fileCount, "file");
+    return `${this.theme.fg("warning", parts.count)} ${this.theme.fg("muted", parts.label)}`;
+  }
+
+  private fileCountPlainText(fileCount: number): string {
+    return this.countParts(fileCount, "file").plain;
+  }
+
+  private countParts(
+    count: number,
+    singular: string,
+  ): {
+    count: string;
+    label: string;
+    plain: string;
+  } {
+    const countText = String(count);
+    const label = `${singular}${count === 1 ? "" : "s"}`;
+    return {
+      count: countText,
+      label,
+      plain: `${countText} ${label}`,
+    };
   }
 
   private fileHunkText(turn: ReviewTurn): string {
-    const hunkCount = turn.files.reduce(
-      (total, file) => total + file.hunks.length,
-      0,
-    );
-    return `${this.theme.fg("warning", String(turn.files.length))} ${this.theme.fg("muted", `file${turn.files.length === 1 ? "" : "s"}`)} ${this.hunkCountText(hunkCount)}`;
+    return `${this.fileCountText(turn.files.length)} ${this.hunkCountText(this.hunkCountForTurn(turn))}`;
+  }
+
+  private fileHunkPlainText(turn: ReviewTurn): string {
+    return `${this.fileCountPlainText(turn.files.length)} ${this.hunkCountPlainText(this.hunkCountForTurn(turn))}`;
+  }
+
+  private hunkCountForTurn(turn: ReviewTurn): number {
+    return turn.files.reduce((total, file) => total + file.hunks.length, 0);
   }
 
   private turnLabel(turn: ReviewTurn): string {
-    return `${this.turnLabelPrefix()}${turn.prompt || "(empty prompt)"}`;
+    return this.turnLabelParts(turn).plain;
+  }
+
+  private turnLabelParts(turn: ReviewTurn): {
+    plain: string;
+    prefix: string;
+    prompt: string;
+  } {
+    const prefix = this.turnLabelPrefix();
+    const prompt = turn.prompt || "(empty prompt)";
+    return {
+      plain: `${prefix}${prompt}`,
+      prefix,
+      prompt,
+    };
   }
 
   private turnLabelPrefix(): string {
@@ -2209,7 +2267,7 @@ export class DiffReviewComponent implements Component {
   private describeRow(row: RenderRow): string {
     if (row.kind === "turn") return this.turnLabel(row.turn);
     if (row.kind === "file") {
-      return `${row.file.path} • ${row.file.hunks.length} hunk${row.file.hunks.length === 1 ? "" : "s"}`;
+      return `${row.file.path} • ${this.hunkCountPlainText(row.file.hunks.length)}`;
     }
     if (row.kind === "hunk") {
       return `${row.hunk.path}:${row.hunk.jumpLine} • ${keyText("app.editor.external")} opens here`;
@@ -2227,6 +2285,10 @@ interface ParsedDiffLine {
 function truncateSummaryBody(body: string): string {
   if (body.length <= MAX_SUMMARY_BODY_CHARS) return body;
   return `${body.slice(0, MAX_SUMMARY_BODY_CHARS)}\n\n[BetterDiff summary context truncated at ${MAX_SUMMARY_BODY_CHARS} characters]`;
+}
+
+function diffLineRowId(hunk: ReviewHunk, index: number): string {
+  return `${hunk.id}:line:${index}`;
 }
 
 function parseDiffLine(line: string): ParsedDiffLine | undefined {

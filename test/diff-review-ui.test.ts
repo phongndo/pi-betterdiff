@@ -797,6 +797,41 @@ describe("DiffReviewComponent", () => {
     );
   });
 
+  it("searches the semantic text shown in turn, file, and hunk labels", () => {
+    const turnComponent = createComponent(buildPluralModel());
+    turnComponent.handleInput("/");
+    for (const char of "user +6 -3 2 files 3 hunks") {
+      turnComponent.handleInput(char);
+    }
+    let rendered = renderComponent(turnComponent);
+    expect(rendered).toContain("Search: user +6 -3 2 files 3 hunks▌  1/1");
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>",
+    );
+
+    const fileComponent = createComponent(buildPluralModel());
+    fileComponent.handleInput("/");
+    for (const char of "src/a.ts +3 -1 2 hunks") {
+      fileComponent.handleInput(char);
+    }
+    rendered = renderComponent(fileComponent);
+    expect(rendered).toContain("Search: src/a.ts +3 -1 2 hunks▌  1/1");
+    expect(rendered).toContain(
+      "<selectedBg>› ├─ ⊟ src/a.ts +3 -1 2 hunks</selectedBg>",
+    );
+
+    const hunkComponent = createComponent(buildPluralModel());
+    hunkComponent.handleInput("/");
+    for (const char of "lines 7-9 edit +2 -1 src/a.ts") {
+      hunkComponent.handleInput(char);
+    }
+    rendered = renderComponent(hunkComponent);
+    expect(rendered).toContain("Search: lines 7-9 edit +2 -1 src/a.ts▌  1/1");
+    expect(rendered).toContain(
+      "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+    );
+  });
+
   it("clears an in-progress search with escape without closing review", () => {
     let closeCount = 0;
     const component = createComponent(buildPluralModel(), theme, (action) => {
@@ -867,6 +902,37 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("├─ ⊟ src/a.ts +3 -1 2 hunks");
     expect(rendered).toContain(
       "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
+    );
+  });
+
+  it("greps diff body content and reveals the matched diff line", () => {
+    const component = createComponent(
+      buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 5,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+                bodyLines: ["+5 uniqueDiffNeedle"],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    component.handleInput("?");
+    for (const char of "uniqueDiffNeedle") component.handleInput(char);
+    const rendered = renderComponent(component);
+
+    expect(rendered).toContain("Grep: uniqueDiffNeedle▌  1/1");
+    expect(rendered).toMatch(
+      /<selectedBg>›\s+\+5 uniqueDiffNeedle<\/selectedBg>/u,
     );
   });
 
