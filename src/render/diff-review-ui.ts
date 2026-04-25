@@ -472,6 +472,14 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
+    if (this.searchQuery.length > 0 && this.matchesCancel(data)) {
+      this.clearPendingBracket();
+      this.pendingG = false;
+      this.clearSearch();
+      this.tui.requestRender();
+      return;
+    }
+
     if (
       this.pendingBracket &&
       (this.matchesCancel(data) || data === "q" || data === "Q")
@@ -622,7 +630,7 @@ export class DiffReviewComponent implements Component {
 
   private handleSearchInput(data: string): void {
     if (this.matchesCancel(data)) {
-      this.searchEditing = false;
+      this.clearSearch();
       this.tui.requestRender();
       return;
     }
@@ -659,6 +667,11 @@ export class DiffReviewComponent implements Component {
     this.searchEditing = true;
     this.notice = undefined;
     this.selectCurrentSearchMatch();
+  }
+
+  private clearSearch(): void {
+    this.searchEditing = false;
+    this.searchQuery = "";
   }
 
   private moveActionMenuSelection(delta: number): void {

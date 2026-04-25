@@ -797,6 +797,46 @@ describe("DiffReviewComponent", () => {
     );
   });
 
+  it("clears an in-progress search with escape without closing review", () => {
+    let closeCount = 0;
+    const component = createComponent(buildPluralModel(), theme, (action) => {
+      if (action.type === "close") closeCount += 1;
+    });
+
+    component.handleInput("/");
+    for (const char of "src/b.ts") component.handleInput(char);
+    expect(renderComponent(component)).toContain("Search: src/b.ts▌  1/2");
+
+    component.handleInput("\x1b");
+    const rendered = renderComponent(component);
+
+    expect(closeCount).toBe(0);
+    expect(rendered).not.toContain("Search:");
+    expect(rendered).not.toContain("src/b.ts▌");
+  });
+
+  it("clears a kept search with escape before closing review", () => {
+    let closeCount = 0;
+    const component = createComponent(buildPluralModel(), theme, (action) => {
+      if (action.type === "close") closeCount += 1;
+    });
+
+    component.handleInput("/");
+    for (const char of "src/b.ts") component.handleInput(char);
+    component.handleInput("\r");
+    expect(renderComponent(component)).toContain("Search: src/b.ts  1/2");
+
+    component.handleInput("\x1b");
+    let rendered = renderComponent(component);
+    expect(closeCount).toBe(0);
+    expect(rendered).not.toContain("Search:");
+
+    component.handleInput("\x1b");
+    rendered = renderComponent(component);
+    expect(closeCount).toBe(1);
+    expect(rendered).not.toContain("Search:");
+  });
+
   it("does not search rows hidden by collapsed file details", () => {
     const component = createComponent(buildPluralModel());
 

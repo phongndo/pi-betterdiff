@@ -4,14 +4,6 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
 
 ## Open review findings from `70b17e7` (`feat: add BetterDiff search and grep`)
 
-- [ ] **Make search cancel actually close or clear the active search.**
-  - **Location:** `src/render/diff-review-ui.ts:343-363`, `src/render/diff-review-ui.ts:623-662`
-  - **Context:** The rendered search hint says `esc: close.`, but `handleSearchInput()` only sets `searchEditing = false`. The query remains active, the search line remains visible, and `n` / `N` still operate on that stale query. After the user presses enter to keep a search, pressing escape goes through the normal cancel path and closes the entire diff review instead of clearing search first.
-  - **Why this is an issue:** The UI text and behavior disagree. Users have no obvious way to dismiss an active search except manually backspacing the whole query, and the stale search state makes accidental review close easy.
-  - **How to verify:** Start `/`, type a matching query, press escape, and render. The query is still shown. Start `/`, type a query, press enter, then press escape; the component closes instead of clearing the active search.
-  - **Smallest acceptable fix:** Add one explicit search-close path. Escape while editing search should clear the search query and leave the diff review open. Escape while a non-editing search query is active should clear the query before falling through to closing the review. If the intended behavior is only “stop editing,” then the hint must stop saying `close`, but that would still leave search dismissal under-designed.
-  - **Required test:** Input tests proving escape clears an in-progress search without closing the review, and clears a kept search before the normal review-close behavior can run.
-
 - [ ] **Stop duplicating rendered row label logic for search.**
   - **Location:** `src/render/diff-review-ui.ts:1438-1476`, `src/render/diff-review-ui.ts:1696-1770`
   - **Context:** Tree search claims to search rendered BetterDiff tree labels, but searchable text is rebuilt separately in `searchableTextForTurn()`, `searchableTextForFile()`, and `searchableTextForHunk()`. That duplicates the semantic label parts already assembled by `renderTurnRow()`, `renderDetailRow()`, `formatHunkLabel()`, `fileHunkText()`, `hunkCountText()`, and `statText()`.
@@ -57,6 +49,17 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
   - **Context:** `renderSearchLine()` calls `searchStatus()`, which rebuilds/filter matches. Search input also rebuilds/filter matches on every character. Grep target construction walks every turn/file/hunk/diff line each time.
   - **Why this smells:** This is probably fine for small review models, but it is a plausible performance problem for very large git diffs or long session histories.
   - **Smallest acceptable fix:** Do not optimize blindly. If large diffs become sluggish, cache target lists per row/model version and only recompute filtered matches when query/mode/tree visibility changes.
+
+## Resolved review findings from `70b17e7` (`feat: add BetterDiff search and grep`)
+
+- [x] **Make search cancel actually close or clear the active search.**
+  - **Location:** `src/render/diff-review-ui.ts`, `test/diff-review-ui.test.ts`
+  - **Context:** The rendered search hint says `esc: close.`, but `handleSearchInput()` only set `searchEditing = false`. The query remained active, the search line remained visible, and `n` / `N` still operated on that stale query. After the user pressed enter to keep a search, pressing escape went through the normal cancel path and closed the entire diff review instead of clearing search first.
+  - **Why this was an issue:** The UI text and behavior disagreed. Users had no obvious way to dismiss an active search except manually backspacing the whole query, and the stale search state made accidental review close easy.
+  - **How to verify:** Start `/`, type a matching query, press escape, and render. Start `/`, type a query, press enter, then press escape. The search line should disappear and the review should stay open. A second escape should close the review normally.
+  - **Smallest acceptable fix:** Add one explicit search-clear path. Escape while editing search clears the search query and leaves the diff review open. Escape while a non-editing search query is active clears the query before falling through to closing the review.
+  - **Required test:** Input tests proving escape clears an in-progress search without closing the review, and clears a kept search before the normal review-close behavior can run.
+  - **Fixed in working tree:** `clearSearch()` now clears both edit state and query text. Cancel input while search is being edited, or while a kept search is active, clears the search and requests a render instead of closing the review. Tests cover both in-progress and kept-search escape behavior.
 
 ## Resolved review findings from `9164cdc` (`style: improve diff metadata coloring`)
 
