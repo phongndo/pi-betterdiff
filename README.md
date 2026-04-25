@@ -108,11 +108,6 @@ It re-validates the package, creates a tarball with `npm pack`, uploads it as a 
 
 > The package is currently marked `private: true` to prevent accidental npm publication while the extension is still an early prototype.
 
-## Planning docs
-
-- [docs/plan.md](docs/plan.md) — scaffold and implementation plan
-- [docs/diff-review-spec.md](docs/diff-review-spec.md) — planned `/diff` UX and navigation model
-
 ## Next steps
 
 Next work should deepen the prototype: richer write/overwrite diffs, broader branch/ref comparison controls, better tests for renderer output, and more editor adapters.
