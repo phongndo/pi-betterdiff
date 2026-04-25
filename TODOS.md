@@ -30,29 +30,15 @@ Feature goals for future BetterDiff diff modes and navigation/search capabilitie
     - very large diffs
   - **Definition of done:** The user can tell exactly which refs are being compared and what comparison semantics are being used.
 
-### Search and grep goals
+### Possible future work
 
-- [ ] **Scoped grep inside BetterDiff**
-  - **User goal:** Search actual diff content within the current review scope.
-  - **Primary command/use case:** Run a grep-style query from inside the diff review UI and jump through matching diff lines/hunks.
-  - **Scope rule:** Grep should use the tree nesting context the user is currently in.
-    - selected turn: grep only that turn's changed files/hunks
-    - selected file: grep only that file's hunks/diff lines
-    - selected hunk: grep only that hunk's diff body
-    - selected diff line: grep the containing hunk, unless the UI clearly offers a wider parent scope
-    - top-level/global context: grep the entire active BetterDiff comparison/model
-  - **Top-level behavior:** If the user invokes grep from the top-level review context, it should be global for the current diff mode, not the entire repository unless the current diff mode itself is repository-wide.
-  - **Expected match targets:**
-    - diff body text
-    - file paths
-    - hunk labels/ranges if useful
-    - optionally turn prompts for session turn mode
-  - **Expected result behavior:**
-    - show match count and current match position
-    - jump next/previous match
-    - expand parent rows as needed so the matched diff line is visible
-    - preserve enough state to return to the previous selection when grep closes if practical
-  - **Definition of done:** A user can grep within the current nested BetterDiff scope, and global grep only happens when invoked from top-level/global context.
+- [ ] **Cache BetterDiff search/grep targets for very large reviews**
+  - **User goal:** Keep tree search and global grep responsive on very large git diffs or long session histories.
+  - **Trigger for doing this:** Only implement after there is a real large-diff slowdown or a benchmark showing repeated target rebuilding is measurable.
+  - **Current behavior:** Search/grep target lists are rebuilt and filtered when the query changes and when the search status line renders. Grep target construction walks every turn/file/hunk/diff line.
+  - **Likely implementation:** Cache target lists and filtered matches by search mode, query, model version, and rendered-row/tree-visibility state. Invalidate on model replacement, row invalidation, search mode/query changes, and grep reveal changes that alter visibility.
+  - **Non-goal:** Do not add speculative cache complexity before there is evidence that current behavior is slow.
+  - **Definition of done:** Large BetterDiff reviews stay responsive during `/` search and `?` global grep, with tests covering cache invalidation for query changes, mode changes, row invalidation, and model replacement.
 
 ## Finished feature goals
 
@@ -175,15 +161,13 @@ Feature goals for future BetterDiff diff modes and navigation/search capabilitie
     - selected row should remain obvious after a match
   - **Relationship to grep:** This is for navigating tree rows by label. It is not a full content grep.
   - **Definition of done:** A user can search the BetterDiff tree similarly to tree search and land on matching turns/files/hunks predictably.
-  - **Known follow-ups:** Search cancel semantics and search-label ownership are tracked in `ISSUES.md`.
 
-- [x] **All-review grep bootstrap**
-  - **User goal:** Search across all BetterDiff review content from inside the diff review UI.
+- [x] **Global BetterDiff grep**
+  - **User goal:** Search all BetterDiff review content from inside the diff review UI, the same way repository grep is not limited by the currently selected file.
   - **Primary command/use case:** Press `?`, type a query, and jump through matching turns/files/hunks/diff lines with `n` / `N`.
-  - **Scope:** Global across the current BetterDiff review model, including content hidden by collapsed files or unrendered turn details.
+  - **Scope:** Always global across the current BetterDiff review model, including content hidden by collapsed branches/files or unrendered turn details.
   - **Expected behavior:**
     - show match count and current match position
-    - expand parent turn/file rows as needed so the matched row is visible
+    - expand parent turn/file/branch rows as needed so the matched row is visible
     - cycle forward/backward through matches
-  - **Definition of done:** A user can grep all review content and reveal hidden matches without leaving BetterDiff.
-  - **Known follow-ups:** This is not scoped grep. Scoped grep remains an open feature goal above, and grep/search bugs are tracked in `ISSUES.md`.
+  - **Definition of done:** A user can grep all review content and reveal hidden matches without leaving BetterDiff. Grep is intentionally not scoped to the selected row.

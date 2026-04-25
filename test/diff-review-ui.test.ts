@@ -963,7 +963,7 @@ describe("DiffReviewComponent", () => {
     for (const char of "line 7") component.handleInput(char);
     const rendered = renderComponent(component);
 
-    expect(rendered).toContain("Grep: line 7▌  1/1");
+    expect(rendered).toContain("Grep all: line 7▌  1/1");
     expect(rendered).toContain("├─ ⊟ src/a.ts +3 -1 2 hunks");
     expect(rendered).toContain(
       "<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>",
@@ -995,7 +995,7 @@ describe("DiffReviewComponent", () => {
     for (const char of "uniqueDiffNeedle") component.handleInput(char);
     const rendered = renderComponent(component);
 
-    expect(rendered).toContain("Grep: uniqueDiffNeedle▌  1/1");
+    expect(rendered).toContain("Grep all: uniqueDiffNeedle▌  1/1");
     expect(rendered).toMatch(
       /<selectedBg>›\s+\+5 uniqueDiffNeedle<\/selectedBg>/u,
     );
@@ -1040,18 +1040,18 @@ describe("DiffReviewComponent", () => {
     component.handleInput("?");
     for (const char of "sharedNeedle") component.handleInput(char);
     let rendered = renderComponent(component);
-    expect(rendered).toContain("Grep: sharedNeedle▌  1/2");
+    expect(rendered).toContain("Grep all: sharedNeedle▌  1/2");
     expect(rendered).toContain("+7 sharedNeedle first</selectedBg>");
 
     component.handleInput("\r");
     component.handleInput("n");
     rendered = renderComponent(component);
-    expect(rendered).toContain("Grep: sharedNeedle  2/2");
+    expect(rendered).toContain("Grep all: sharedNeedle  2/2");
     expect(rendered).toContain("+30 sharedNeedle second</selectedBg>");
 
     component.handleInput("N");
     rendered = renderComponent(component);
-    expect(rendered).toContain("Grep: sharedNeedle  1/2");
+    expect(rendered).toContain("Grep all: sharedNeedle  1/2");
     expect(rendered).toContain("+7 sharedNeedle first</selectedBg>");
   });
 
@@ -1067,7 +1067,7 @@ describe("DiffReviewComponent", () => {
     for (const char of "foldedNeedle") component.handleInput(char);
     rendered = renderComponent(component);
 
-    expect(rendered).toContain("Grep: foldedNeedle▌  1/1");
+    expect(rendered).toContain("Grep all: foldedNeedle▌  1/1");
     expect(rendered).toContain("user: child change");
     expect(rendered).toContain("+2 foldedNeedle</selectedBg>");
   });
@@ -1079,7 +1079,7 @@ describe("DiffReviewComponent", () => {
     for (const char of "second.ts") component.handleInput(char);
     const rendered = renderComponent(component);
 
-    expect(rendered).toContain("Grep: second.ts▌  1/2");
+    expect(rendered).toContain("Grep all: second.ts▌  1/2");
     expect(rendered).toContain(
       "<selectedBg>› └─ ⊟ src/second.ts +2 -1 1 hunk</selectedBg>",
     );

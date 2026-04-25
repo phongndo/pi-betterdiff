@@ -4,23 +4,28 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
 
 ## Open review findings from `70b17e7` (`feat: add BetterDiff search and grep`)
 
-- [ ] **Do not let global grep masquerade as scoped grep.**
-  - **Location:** `src/render/diff-review-ui.ts:1631-1693`, `TODOS.md`
-  - **Context:** The implemented `?` grep traverses the whole review model. That is valid for the completed “all-review grep bootstrap,” but the remaining product goal is scoped grep based on the currently selected turn/file/hunk/diff line.
-  - **Why this is an issue:** If this global traversal becomes the only grep path, the later scoped grep feature will either break existing behavior or pile scope hacks on top of it. That is how keybindings become semantic junk drawers.
-  - **How to verify:** Select a file or hunk, press `?`, and search for text that only exists elsewhere in the model. Current grep will leave the selected scope and jump globally.
-  - **Smallest acceptable fix:** Keep global grep explicitly labeled as global/all-review, and implement scoped grep as a separate mode or derive its target set from the selected row. Do not pretend the current global traversal satisfies scoped grep.
-  - **Required test:** Tests for invoking grep from selected turn, file, hunk, and diff-line rows proving matches stay inside the expected scope; separate tests for intentional global/all-review grep.
+No open review findings.
 
 ## Suspicious open cleanup
 
-- [ ] **Watch search target rebuilding on large diffs.**
-  - **Location:** `src/render/diff-review-ui.ts:1607-1693`
-  - **Context:** `renderSearchLine()` calls `searchStatus()`, which rebuilds/filter matches. Search input also rebuilds/filter matches on every character. Grep target construction walks every turn/file/hunk/diff line each time.
-  - **Why this smells:** This is probably fine for small review models, but it is a plausible performance problem for very large git diffs or long session histories.
-  - **Smallest acceptable fix:** Do not optimize blindly. If large diffs become sluggish, cache target lists per row/model version and only recompute filtered matches when query/mode/tree visibility changes.
+No open suspicious cleanup.
 
 ## Resolved review findings from `70b17e7` (`feat: add BetterDiff search and grep`)
+
+- [x] **Keep BetterDiff grep global instead of scoped.**
+  - **Location:** `src/render/diff-review-ui.ts`, `TODOS.md`
+  - **Context:** A previous follow-up treated global grep as suspicious because `TODOS.md` still described scoped grep. Product direction is now explicit: grep should behave like repository grep and search all review content, regardless of the currently selected turn/file/hunk.
+  - **Why this was an issue:** The issue tracker and TODO list contradicted the intended behavior. That would push future work toward adding scope rules the UI does not want.
+  - **How to verify:** Press `?` from any selected row and search for content elsewhere in the current BetterDiff review model. Grep should find and reveal it.
+  - **Smallest acceptable fix:** Remove scoped grep as an open feature goal, document global grep as the finished intended behavior, and make the grep prompt explicit.
+  - **Fixed in working tree:** `TODOS.md` now documents `Global BetterDiff grep`; the open scoped-grep issue was closed; the grep prompt label now renders as `Grep all:`.
+
+- [x] **Move speculative search-target caching out of issues.**
+  - **Location:** `ISSUES.md`, `TODOS.md`
+  - **Context:** Search/grep target rebuilding on very large diffs is a plausible performance concern, but there is no current failing behavior or benchmark showing it is a bug.
+  - **Why this was an issue:** Keeping speculative optimization in `ISSUES.md` made it look like active cleanup debt instead of optional future work.
+  - **Smallest acceptable fix:** Move it to `TODOS.md` as possible future work and keep `ISSUES.md` for real bugs/review findings.
+  - **Fixed in working tree:** `TODOS.md` now has a possible future work item for caching BetterDiff search/grep targets; `ISSUES.md` has no open suspicious cleanup.
 
 - [x] **Make search cancel actually close or clear the active search.**
   - **Location:** `src/render/diff-review-ui.ts`, `test/diff-review-ui.test.ts`

@@ -344,7 +344,7 @@ export class DiffReviewComponent implements Component {
     if (!this.hasSearchLine()) return undefined;
 
     const { total, selectedIndex } = this.searchStatus();
-    const label = this.searchMode === "grep" ? "Grep:" : "Search:";
+    const label = this.searchMode === "grep" ? "Grep all:" : "Search:";
     const query = this.searchQuery
       ? this.theme.fg("accent", this.searchQuery)
       : this.theme.fg("muted", "(type query)");
