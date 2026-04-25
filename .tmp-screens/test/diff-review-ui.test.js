@@ -1,0 +1,1154 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { GIT_CHANGES_REVIEW_MODE } from "../src/diff/git.js";
+import { SESSION_TURNS_REVIEW_MODE } from "../src/diff/model.js";
+import { DiffReviewComponent, } from "../src/render/diff-review-ui.js";
+const theme = {
+    fg: (_color, text) => text,
+    bg: (color, text) => `<${color}>${text}</${color}>`,
+    bold: (text) => text,
+};
+const colorTracingTheme = {
+    fg: (color, text) => `<fg:${color}>${text}</fg:${color}>`,
+    bg: (color, text) => `<${color}>${text}</${color}>`,
+    bold: (text) => text,
+};
+const tui = {
+    terminal: { rows: 40 },
+    requestRender() { },
+    stop() { },
+    start() { },
+};
+const keybindings = {
+    matches: () => false,
+};
+describe("DiffReviewComponent", () => {
+    it("renders hunk labels from structured fields", () => {
+        const model = buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 10,
+                            newLines: 3,
+                            additions: 2,
+                            removals: 1,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        });
+        const rendered = renderModel(model);
+        expect(rendered).toContain("lines 10-12  edit  +2 -1 src/a.ts");
+    });
+    it("renders a singular hunk region from structured fields", () => {
+        const model = buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "write",
+                        },
+                    ],
+                },
+            ],
+        });
+        const rendered = renderModel(model);
+        expect(rendered).toContain("line 7  write  +1 -0 src/a.ts");
+    });
+    it("renders summary, turn, file, and hunk behavior text", () => {
+        const model = buildReviewModel({
+            prompt: "change file",
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 10,
+                            newLines: 3,
+                            additions: 2,
+                            removals: 1,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        });
+        const rendered = renderModel(model);
+        expect(rendered).toContain("Better Diff — Session turns 1 turn • 1 file • 1 hunk • +2 -1");
+        expect(rendered).toContain("<selectedBg>› • user: change file +2 -1 1 file 1 hunk</selectedBg>");
+        expect(rendered).toContain("src/a.ts +2 -1 1 hunk");
+        expect(rendered).toContain("lines 10-12  edit  +2 -1 src/a.ts");
+    });
+    it("renders pluralized summary, turn, and file counts", () => {
+        const model = buildPluralModel();
+        const rendered = renderModel(model);
+        expect(rendered).toContain("Better Diff — Session turns 1 turn • 2 files • 3 hunks • +6 -3");
+        expect(rendered).toContain("user: change many files +6 -3 2 files 3 hunks");
+        expect(rendered).toContain("src/a.ts +3 -1 2 hunks");
+        expect(rendered).toContain("src/b.ts +3 -2 1 hunk");
+        expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+    });
+    it("fully expands the most recent turn when opened", () => {
+        const rendered = renderModel(buildPluralModel());
+        expect(rendered).toContain("<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>");
+        expect(rendered).toContain("⊟ src/a.ts +3 -1 2 hunks");
+        expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+        expect(rendered).not.toContain("⊟ lines 7-9  edit  +2 -1 src/a.ts");
+        expect(rendered).toContain("+7 changed");
+        expect(rendered).toContain("+20 changed");
+        expect(rendered).toContain("+30 changed");
+    });
+    it("renders summary additions and removals as separate color segments", () => {
+        const rendered = renderModel(buildPluralModel(), colorTracingTheme);
+        expect(rendered).toContain("<fg:muted>1 turn • 2 files • 3 hunks •</fg:muted> <fg:toolDiffAdded>+6</fg:toolDiffAdded> <fg:toolDiffRemoved>-3</fg:toolDiffRemoved>");
+    });
+    it("switches diff modes from the in-UI mode menu", async () => {
+        const loadedModes = [];
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }), theme, () => { }, keybindings, process.cwd(), (request) => {
+            loadedModes.push(request.kind);
+            return Promise.resolve(buildGitChangesModel());
+        });
+        component.handleInput("m");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("Actions · diff mode");
+        expect(rendered).toContain("✓ Session turns — agent edit/write history by user turn");
+        expect(rendered).toContain("Git changes — staged above unstaged");
+        component.handleInput("j");
+        component.handleInput("\r");
+        await flushPromises();
+        rendered = renderComponent(component);
+        expect(loadedModes).toEqual(["git-changes"]);
+        expect(rendered).toContain("Better Diff — Git changes 2 files • 2 hunks • +3 -1");
+        expect(rendered).toContain("Staged changes — HEAD → index +1 -0 1 file 1 hunk");
+        expect(rendered).toContain("src/staged.ts +1 -0 1 hunk");
+        expect(rendered).toContain("Unstaged changes — index → working tree +2 -1 1 file 1 hunk");
+        expect(rendered).toContain("src/unstaged.ts +2 -1 1 hunk");
+        expect(rendered.indexOf("Staged changes")).toBeLessThan(rendered.indexOf("Unstaged changes"));
+        expect(rendered).not.toContain("user: Staged changes");
+    });
+    it("opens a branch picker for current branch vs selected branch", async () => {
+        const loadedRequests = [];
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }), theme, () => { }, keybindings, process.cwd(), (request) => {
+            if (request.kind === "git-branch-selected") {
+                loadedRequests.push(`${request.kind}:${request.baseRef}`);
+                return Promise.resolve(buildGitBranchModel(request.baseRef));
+            }
+            loadedRequests.push(request.kind);
+            return Promise.resolve(buildGitChangesModel());
+        }, () => Promise.resolve(["main", "release/1.0"]));
+        component.handleInput("m");
+        component.handleInput("j");
+        component.handleInput("j");
+        component.handleInput("j");
+        component.handleInput("\r");
+        await flushPromises();
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("Actions · base branch/ref");
+        expect(rendered).toContain("main — current branch vs main");
+        expect(rendered).toContain("release/1.0 — current branch vs release/1.0");
+        component.handleInput("j");
+        component.handleInput("\r");
+        await flushPromises();
+        rendered = renderComponent(component);
+        expect(loadedRequests).toEqual(["git-branch-selected:release/1.0"]);
+        expect(rendered).toContain("Better Diff — Current branch vs release/1.0 1 file • 1 hunk • +4 -2");
+        expect(rendered).toContain("merge-base(release/1.0, feature/foo) → feature/foo");
+        expect(rendered).toContain("Current branch vs release/1.0 — release/1.0...feature/foo +4 -2 1 file 1 hunk");
+    });
+    it("marks only the selected row using theme background styling", () => {
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }));
+        let rendered = renderComponent(component);
+        expect(countOccurrences(rendered, "<selectedBg>")).toBe(1);
+        expect(rendered).toContain("<selectedBg>› • user: change file +1 -0 1 file 1 hunk</selectedBg>");
+        component.handleInput("\t");
+        rendered = renderComponent(component);
+        expect(countOccurrences(rendered, "<selectedBg>")).toBe(1);
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/a.ts +1 -0 1 hunk</selectedBg>");
+        expect(rendered).toContain("  • user: change file +1 -0 1 file 1 hunk");
+    });
+    it("opens a scoped action menu on enter instead of opening a file", () => {
+        const enterAlsoMatchesExternalEditor = {
+            matches: (data, id) => data === "\r" && id === "app.editor.external",
+        };
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }), theme, () => { }, enterAlsoMatchesExternalEditor);
+        component.handleInput("\r");
+        const rendered = renderComponent(component);
+        expect(rendered).toContain("Actions · turn 1");
+        expect(rendered).toContain("Prompt:");
+        expect(rendered).toContain("change file");
+        expect(rendered).toContain("Generate summary — Ask the agent to summarize this selected diff scope");
+        expect(rendered).toContain("Custom summary… — Add focus instructions before generating the summary");
+        expect(rendered).not.toContain("Jump to native /tree");
+        expect(rendered).toContain("Undo this turn — user: change file · 1 edit hunk / 1 file");
+        expect(rendered).not.toContain("Undo path to root");
+        expect(rendered).not.toContain("File no longer exists");
+    });
+    it("wraps the full selected prompt in the action menu", () => {
+        const prompt = "start of a very long BetterDiff prompt " +
+            "with enough words to wrap across several narrow terminal lines " +
+            "while preserving the final important instruction";
+        const component = createComponent(buildReviewModel({
+            prompt,
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }));
+        component.handleInput("\r");
+        const rendered = renderComponent(component, 72);
+        expect(rendered).toContain("Actions · turn 1");
+        expect(rendered).toContain("Prompt:");
+        expect(rendered).toContain("start of a very long BetterDiff prompt");
+        expect(rendered).toContain("important instruction");
+        expect(rendered).not.toContain("Actions · turn 1: start of a very long");
+    });
+    it("returns a generate-summary action from the scoped action menu", () => {
+        let action;
+        const component = createComponent(buildPluralModel(), theme, (result) => {
+            action = result;
+        });
+        component.handleInput("\r");
+        component.handleInput("\r");
+        expect(action?.type).toBe("summarize");
+        if (action?.type !== "summarize")
+            return;
+        expect(action.custom).toBe(false);
+        expect(action.summary.title).toBe("turn 1: change many files");
+        expect(action.summary.body).toContain("Prompt: change many files");
+        expect(action.summary.body).toContain("File: src/a.ts");
+        expect(action.summary.body).toContain("+7 changed");
+    });
+    it("cancels the scoped action menu without closing the diff review", () => {
+        let closeCount = 0;
+        const component = createComponent(buildPluralModel(), theme, (action) => {
+            if (action.type === "close")
+                closeCount += 1;
+        });
+        component.handleInput("\r");
+        component.handleInput("\x1b");
+        const rendered = renderComponent(component);
+        expect(closeCount).toBe(0);
+        expect(rendered).not.toContain("Actions ·");
+        expect(rendered).toContain("<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>");
+    });
+    it("offers undo-scoped file actions from the enter menu", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        component.handleInput("\r");
+        const rendered = renderComponent(component);
+        expect(rendered).toContain("Actions · file src/a.ts");
+        expect(rendered).toContain("Undo this file in this turn — src/a.ts · 2 edit hunks / 1 file");
+        expect(rendered).toContain("Undo this turn — user: change many files · 2 edit hunks / 1 file");
+    });
+    it("confirms undo-scoped hunk actions from the enter menu", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        component.handleInput("l");
+        component.handleInput("\r");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("Actions · hunk src/a.ts:7");
+        expect(rendered).toContain("Undo this hunk — src/a.ts · 1 edit hunk / 1 file");
+        component.handleInput("j");
+        component.handleInput("j");
+        component.handleInput("\r");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("Actions · confirm undo this hunk");
+        expect(rendered).toContain("Confirm undo this hunk — Reverse 1 edit hunk / 1 file in the working tree");
+    });
+    it("undoes selected edit hunks after confirmation", () => {
+        const cwd = mkdtempSync(join(tmpdir(), "betterdiff-undo-"));
+        try {
+            writeFileSync(join(cwd, "a.ts"), "before\nnew\nafter\n", "utf8");
+            const component = createComponent(buildReviewModel({
+                files: [
+                    {
+                        path: "a.ts",
+                        hunks: [
+                            {
+                                jumpLine: 2,
+                                newLines: 1,
+                                additions: 1,
+                                removals: 1,
+                                toolName: "edit",
+                                bodyLines: [" 1 before", "-2 old", "+2 new", " 3 after"],
+                            },
+                        ],
+                    },
+                ],
+            }), theme, () => { }, keybindings, cwd);
+            component.handleInput("\r");
+            component.handleInput("j");
+            component.handleInput("j");
+            component.handleInput("j");
+            component.handleInput("\r");
+            component.handleInput("\r");
+            expect(readFileSync(join(cwd, "a.ts"), "utf8")).toBe("before\nold\nafter\n");
+            expect(renderComponent(component)).toContain("Undo this turn: reversed 1 edit hunk in 1 file.");
+        }
+        finally {
+            rmSync(cwd, { recursive: true, force: true });
+        }
+    });
+    it("keeps turn navigation on turns without opening details until l enters them", () => {
+        const component = createComponent(buildTwoTurnModel());
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› • user: first change +1 -0 1 file 1 hunk</selectedBg>");
+        expect(rendered).toContain("src/first.ts +1 -0 1 hunk");
+        component.handleInput("j");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› user: second change +2 -1 1 file 1 hunk</selectedBg>");
+        expect(rendered).not.toContain("src/first.ts +1 -0 1 hunk");
+        expect(rendered).not.toContain("src/second.ts +2 -1 1 hunk");
+        component.handleInput("l");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/second.ts +2 -1 1 hunk</selectedBg>");
+    });
+    it("uses scoped item offsets for turn page movement without opening details", () => {
+        const component = createComponent(buildTwoTurnModel());
+        component.handleInput("\u001b[C");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› user: second change +2 -1 1 file 1 hunk</selectedBg>");
+        expect(rendered).not.toContain("src/second.ts +2 -1 1 hunk");
+        component.handleInput("\u001b[D");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› • user: first change +1 -0 1 file 1 hunk</selectedBg>");
+        expect(rendered).not.toContain("src/first.ts +1 -0 1 hunk");
+    });
+    it("collapses selected turn details with h and re-enters them with l", () => {
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }));
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("src/a.ts +1 -0 1 hunk");
+        component.handleInput("h");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› • user: change file +1 -0 1 file 1 hunk</selectedBg>");
+        expect(rendered).not.toContain("src/a.ts +1 -0 1 hunk");
+        component.handleInput("l");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/a.ts +1 -0 1 hunk</selectedBg>");
+    });
+    it("scopes c/e to selected turn details", () => {
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }));
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("src/a.ts +1 -0 1 hunk");
+        component.handleInput("c");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› • user: change file +1 -0 1 file 1 hunk</selectedBg>");
+        expect(rendered).not.toContain("src/a.ts +1 -0 1 hunk");
+        component.handleInput("e");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("src/a.ts +1 -0 1 hunk");
+    });
+    it("scopes c/e to file rows when selected on a file", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+        expect(rendered).toContain("lines 30-31  write  +3 -2 src/b.ts");
+        component.handleInput("c");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› ├─ ⊞ src/a.ts +3 -1 2 hunks</selectedBg>");
+        expect(rendered).not.toContain("lines 7-9  edit  +2 -1 src/a.ts");
+        expect(rendered).not.toContain("lines 30-31  write  +3 -2 src/b.ts");
+        component.handleInput("e");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› ├─ ⊟ src/a.ts +3 -1 2 hunks</selectedBg>");
+        expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+        expect(rendered).toContain("lines 30-31  write  +3 -2 src/b.ts");
+    });
+    it("keeps hunk rows non-collapsible", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        component.handleInput("l");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>");
+        expect(rendered).toContain("+7 changed");
+        expect(rendered).toContain("+20 changed");
+        expect(rendered).toContain("+30 changed");
+        component.handleInput("c");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>");
+        expect(rendered).toContain("+7 changed");
+        expect(rendered).toContain("+20 changed");
+        expect(rendered).toContain("+30 changed");
+        expect(rendered).not.toContain("⊞ lines 7-9");
+        expect(rendered).not.toContain("⊟ lines 7-9");
+    });
+    it("keeps file navigation on files while hunks stay visible until l enters them", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› ├─ ⊟ src/a.ts +3 -1 2 hunks</selectedBg>");
+        expect(rendered).toContain("lines 7-9  edit  +2 -1 src/a.ts");
+        component.handleInput("j");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/b.ts +3 -2 1 hunk</selectedBg>");
+        expect(rendered).toContain("lines 30-31  write  +3 -2 src/b.ts");
+        expect(rendered).not.toContain("<selectedBg>› ├─ ⊞ lines 7-9");
+        expect(rendered).not.toContain("<selectedBg>› ├─ ⊟ lines 7-9");
+        const hunkComponent = createComponent(buildPluralModel());
+        hunkComponent.handleInput("l");
+        hunkComponent.handleInput("l");
+        rendered = renderComponent(hunkComponent);
+        expect(rendered).toContain("<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>");
+    });
+    it("uses scoped item offsets for file page movement", () => {
+        const component = createComponent(buildThreeFileModel());
+        component.handleInput("l");
+        component.handleInput("\u001b[C");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/c.ts +3 -0 1 hunk</selectedBg>");
+        component.handleInput("\u001b[D");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› ├─ ⊟ src/a.ts +1 -0 1 hunk</selectedBg>");
+    });
+    it("keeps hunk navigation on hunks while visible diff lines stay unselected until l enters them", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        component.handleInput("l");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>");
+        expect(rendered).toContain("+7 changed");
+        component.handleInput("j");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>› │  └─   line 20  edit  +1 -0 src/a.ts</selectedBg>");
+        expect(rendered).not.toContain("<selectedBg>› │     +7 changed");
+        const diffLineComponent = createComponent(buildPluralModel());
+        diffLineComponent.handleInput("l");
+        diffLineComponent.handleInput("l");
+        diffLineComponent.handleInput("l");
+        rendered = renderComponent(diffLineComponent);
+        expect(rendered).toContain("<selectedBg>› │  │    +7 changed</selectedBg>");
+    });
+    it("uses scoped item offsets for hunk page movement", () => {
+        const component = createComponent(buildThreeHunkModel());
+        component.handleInput("l");
+        component.handleInput("l");
+        component.handleInput("\u001b[C");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>›    └─   line 30  edit  +3 -0 src/a.ts</selectedBg>");
+        component.handleInput("\u001b[D");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("<selectedBg>›    ├─   line 10  edit  +1 -0 src/a.ts</selectedBg>");
+    });
+    it("searches visible BetterDiff tree rows and cycles matches", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("/");
+        for (const char of "src/b.ts")
+            component.handleInput(char);
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("Search: src/b.ts▌  1/2");
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/b.ts +3 -2 1 hunk</selectedBg>");
+        component.handleInput("\r");
+        component.handleInput("n");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("Search: src/b.ts  2/2");
+        expect(rendered).toContain("<selectedBg>›    └─   lines 30-31  write  +3 -2 src/b.ts</selectedBg>");
+        component.handleInput("N");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("Search: src/b.ts  1/2");
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/b.ts +3 -2 1 hunk</selectedBg>");
+    });
+    it("searches the semantic text shown in turn, file, and hunk labels", () => {
+        const turnComponent = createComponent(buildPluralModel());
+        turnComponent.handleInput("/");
+        for (const char of "user +6 -3 2 files 3 hunks") {
+            turnComponent.handleInput(char);
+        }
+        let rendered = renderComponent(turnComponent);
+        expect(rendered).toContain("Search: user +6 -3 2 files 3 hunks▌  1/1");
+        expect(rendered).toContain("<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>");
+        const fileComponent = createComponent(buildPluralModel());
+        fileComponent.handleInput("/");
+        for (const char of "src/a.ts +3 -1 2 hunks") {
+            fileComponent.handleInput(char);
+        }
+        rendered = renderComponent(fileComponent);
+        expect(rendered).toContain("Search: src/a.ts +3 -1 2 hunks▌  1/1");
+        expect(rendered).toContain("<selectedBg>› ├─ ⊟ src/a.ts +3 -1 2 hunks</selectedBg>");
+        const hunkComponent = createComponent(buildPluralModel());
+        hunkComponent.handleInput("/");
+        for (const char of "lines 7-9 edit +2 -1 src/a.ts") {
+            hunkComponent.handleInput(char);
+        }
+        rendered = renderComponent(hunkComponent);
+        expect(rendered).toContain("Search: lines 7-9 edit +2 -1 src/a.ts▌  1/1");
+        expect(rendered).toContain("<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>");
+    });
+    it("clears an in-progress search with escape without closing review", () => {
+        let closeCount = 0;
+        const component = createComponent(buildPluralModel(), theme, (action) => {
+            if (action.type === "close")
+                closeCount += 1;
+        });
+        component.handleInput("/");
+        for (const char of "src/b.ts")
+            component.handleInput(char);
+        expect(renderComponent(component)).toContain("Search: src/b.ts▌  1/2");
+        component.handleInput("\x1b");
+        const rendered = renderComponent(component);
+        expect(closeCount).toBe(0);
+        expect(rendered).not.toContain("Search:");
+        expect(rendered).not.toContain("src/b.ts▌");
+    });
+    it("clears a kept search with escape before closing review", () => {
+        let closeCount = 0;
+        const component = createComponent(buildPluralModel(), theme, (action) => {
+            if (action.type === "close")
+                closeCount += 1;
+        });
+        component.handleInput("/");
+        for (const char of "src/b.ts")
+            component.handleInput(char);
+        component.handleInput("\r");
+        expect(renderComponent(component)).toContain("Search: src/b.ts  1/2");
+        component.handleInput("\x1b");
+        let rendered = renderComponent(component);
+        expect(closeCount).toBe(0);
+        expect(rendered).not.toContain("Search:");
+        component.handleInput("\x1b");
+        rendered = renderComponent(component);
+        expect(closeCount).toBe(1);
+        expect(rendered).not.toContain("Search:");
+    });
+    it("hides search after backspacing to an empty query and confirming", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("/");
+        for (const char of "zz")
+            component.handleInput(char);
+        component.handleInput("\x7f");
+        component.handleInput("\x7f");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("Search: (type query)▌");
+        expect(rendered).toContain("<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>");
+        component.handleInput("\r");
+        rendered = renderComponent(component);
+        expect(rendered).not.toContain("Search:");
+    });
+    it("starts a fresh query when reopening search", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("/");
+        for (const char of "src/b.ts")
+            component.handleInput(char);
+        component.handleInput("\r");
+        expect(renderComponent(component)).toContain("Search: src/b.ts  1/2");
+        component.handleInput("/");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("Search: (type query)▌");
+        expect(rendered).not.toContain("Search: src/b.ts");
+        for (const char of "src/a.ts")
+            component.handleInput(char);
+        rendered = renderComponent(component);
+        expect(rendered).toContain("Search: src/a.ts▌  1/3");
+        expect(rendered).toContain("<selectedBg>› ├─ ⊟ src/a.ts +3 -1 2 hunks</selectedBg>");
+    });
+    it("clears search when switching diff modes", async () => {
+        const component = createComponent(buildPluralModel(), theme, () => { }, keybindings, process.cwd(), () => Promise.resolve(buildGitChangesModel()));
+        component.handleInput("/");
+        for (const char of "src/a.ts")
+            component.handleInput(char);
+        component.handleInput("\r");
+        expect(renderComponent(component)).toContain("Search: src/a.ts  1/3");
+        component.handleInput("m");
+        component.handleInput("j");
+        component.handleInput("\r");
+        await flushPromises();
+        const rendered = renderComponent(component);
+        expect(rendered).toContain("Better Diff — Git changes");
+        expect(rendered).not.toContain("Search:");
+    });
+    it("does not search rows hidden by collapsed file details", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        component.handleInput("c");
+        component.handleInput("/");
+        for (const char of "line 7")
+            component.handleInput(char);
+        const rendered = renderComponent(component);
+        expect(rendered).toContain("Search: line 7▌  no matches");
+        expect(rendered).toContain("<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>");
+        expect(rendered).toContain("├─ ⊞ src/a.ts +3 -1 2 hunks");
+        expect(rendered).not.toContain("lines 7-9  edit  +2 -1 src/a.ts");
+    });
+    it("greps hidden BetterDiff content and reveals the matched row", () => {
+        const component = createComponent(buildPluralModel());
+        component.handleInput("l");
+        component.handleInput("c");
+        component.handleInput("?");
+        for (const char of "line 7")
+            component.handleInput(char);
+        const rendered = renderComponent(component);
+        expect(rendered).toContain("Grep all: line 7▌  1/1");
+        expect(rendered).toContain("├─ ⊟ src/a.ts +3 -1 2 hunks");
+        expect(rendered).toContain("<selectedBg>› │  ├─   lines 7-9  edit  +2 -1 src/a.ts</selectedBg>");
+    });
+    it("greps diff body content and reveals the matched diff line", () => {
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 5,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                            bodyLines: ["+5 uniqueDiffNeedle"],
+                        },
+                    ],
+                },
+            ],
+        }));
+        component.handleInput("?");
+        for (const char of "uniqueDiffNeedle")
+            component.handleInput(char);
+        const rendered = renderComponent(component);
+        expect(rendered).toContain("Grep all: uniqueDiffNeedle▌  1/1");
+        expect(rendered).toMatch(/<selectedBg>›\s+\+5 uniqueDiffNeedle<\/selectedBg>/u);
+    });
+    it("cycles grep matches across collapsed file details", () => {
+        const component = createComponent(buildReviewModel({
+            files: [
+                {
+                    path: "src/a.ts",
+                    hunks: [
+                        {
+                            jumpLine: 7,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                            bodyLines: ["+7 sharedNeedle first"],
+                        },
+                    ],
+                },
+                {
+                    path: "src/b.ts",
+                    hunks: [
+                        {
+                            jumpLine: 30,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                            bodyLines: ["+30 sharedNeedle second"],
+                        },
+                    ],
+                },
+            ],
+        }));
+        component.handleInput("l");
+        component.handleInput("c");
+        component.handleInput("?");
+        for (const char of "sharedNeedle")
+            component.handleInput(char);
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("Grep all: sharedNeedle▌  1/2");
+        expect(rendered).toContain("+7 sharedNeedle first</selectedBg>");
+        component.handleInput("\r");
+        component.handleInput("n");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("Grep all: sharedNeedle  2/2");
+        expect(rendered).toContain("+30 sharedNeedle second</selectedBg>");
+        component.handleInput("N");
+        rendered = renderComponent(component);
+        expect(rendered).toContain("Grep all: sharedNeedle  1/2");
+        expect(rendered).toContain("+7 sharedNeedle first</selectedBg>");
+    });
+    it("greps through folded branch ancestors and reveals the matched diff line", () => {
+        const component = createComponent(buildBranchModel());
+        component.handleInput("c");
+        let rendered = renderComponent(component);
+        expect(rendered).toContain("⊞ • user: root change");
+        expect(rendered).not.toContain("child change");
+        component.handleInput("?");
+        for (const char of "foldedNeedle")
+            component.handleInput(char);
+        rendered = renderComponent(component);
+        expect(rendered).toContain("Grep all: foldedNeedle▌  1/1");
+        expect(rendered).toContain("user: child change");
+        expect(rendered).toContain("+2 foldedNeedle</selectedBg>");
+    });
+    it("greps across turns whose details are not currently rendered", () => {
+        const component = createComponent(buildTwoTurnModel());
+        component.handleInput("?");
+        for (const char of "second.ts")
+            component.handleInput(char);
+        const rendered = renderComponent(component);
+        expect(rendered).toContain("Grep all: second.ts▌  1/2");
+        expect(rendered).toContain("<selectedBg>› └─ ⊟ src/second.ts +2 -1 1 hunk</selectedBg>");
+        expect(rendered).toContain("lines 2-3  write  +2 -1 src/second.ts");
+    });
+});
+function renderModel(model, renderTheme = theme) {
+    return renderComponent(createComponent(model, renderTheme));
+}
+function createComponent(model, renderTheme = theme, done = () => { }, componentKeybindings = keybindings, cwd = process.cwd(), modelLoader, branchRefsLoader) {
+    return new DiffReviewComponent(model, cwd, tui, renderTheme, componentKeybindings, done, modelLoader, branchRefsLoader);
+}
+function renderComponent(component, width = 200) {
+    return component.render(width).join("\n");
+}
+async function flushPromises() {
+    await new Promise((resolve) => {
+        setImmediate(resolve);
+    });
+}
+function countOccurrences(text, search) {
+    return text.split(search).length - 1;
+}
+function buildPluralModel() {
+    return buildReviewModel({
+        prompt: "change many files",
+        files: [
+            {
+                path: "src/a.ts",
+                hunks: [
+                    {
+                        jumpLine: 7,
+                        newLines: 3,
+                        additions: 2,
+                        removals: 1,
+                        toolName: "edit",
+                    },
+                    {
+                        jumpLine: 20,
+                        newLines: 1,
+                        additions: 1,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                ],
+            },
+            {
+                path: "src/b.ts",
+                hunks: [
+                    {
+                        jumpLine: 30,
+                        newLines: 2,
+                        additions: 3,
+                        removals: 2,
+                        toolName: "write",
+                    },
+                ],
+            },
+        ],
+    });
+}
+function buildGitChangesModel() {
+    const stagedTurn = buildReviewTurn({
+        turnId: "git-changes-staged-turn",
+        ordinal: 1,
+        prompt: "Staged changes — HEAD → index",
+        files: [
+            {
+                path: "src/staged.ts",
+                hunks: [
+                    {
+                        jumpLine: 3,
+                        newLines: 1,
+                        additions: 1,
+                        removals: 0,
+                        toolName: "git",
+                        bodyLines: ["+staged change"],
+                    },
+                ],
+            },
+        ],
+    });
+    const unstagedTurn = buildReviewTurn({
+        turnId: "git-changes-unstaged-turn",
+        ordinal: 2,
+        prompt: "Unstaged changes — index → working tree",
+        files: [
+            {
+                path: "src/unstaged.ts",
+                hunks: [
+                    {
+                        jumpLine: 9,
+                        newLines: 2,
+                        additions: 2,
+                        removals: 1,
+                        toolName: "git",
+                        bodyLines: ["-old unstaged", "+new unstaged", "+extra unstaged"],
+                    },
+                ],
+            },
+        ],
+    });
+    return {
+        ...buildReviewModelFromTurns([stagedTurn, unstagedTurn], [stagedTurn.id]),
+        mode: GIT_CHANGES_REVIEW_MODE,
+    };
+}
+function buildGitBranchModel(baseRef) {
+    const turn = buildReviewTurn({
+        turnId: "git-branch-turn",
+        ordinal: 1,
+        prompt: `Current branch vs ${baseRef} — ${baseRef}...feature/foo`,
+        files: [
+            {
+                path: "src/branch.ts",
+                hunks: [
+                    {
+                        jumpLine: 11,
+                        newLines: 4,
+                        additions: 4,
+                        removals: 2,
+                        toolName: "git",
+                        bodyLines: ["-old branch", "+new branch"],
+                    },
+                ],
+            },
+        ],
+    });
+    return {
+        ...buildReviewModelFromTurns([turn], [turn.id]),
+        mode: {
+            kind: "git-branch-selected",
+            label: `Current branch vs ${baseRef}`,
+            description: `merge-base(${baseRef}, feature/foo) → feature/foo`,
+            baseRef,
+            emptyTitle: `No branch changes found for ${baseRef}...feature/foo.`,
+        },
+    };
+}
+function buildThreeFileModel() {
+    return buildReviewModel({
+        prompt: "change three files",
+        files: [
+            {
+                path: "src/a.ts",
+                hunks: [
+                    {
+                        jumpLine: 10,
+                        newLines: 1,
+                        additions: 1,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                ],
+            },
+            {
+                path: "src/b.ts",
+                hunks: [
+                    {
+                        jumpLine: 20,
+                        newLines: 1,
+                        additions: 2,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                ],
+            },
+            {
+                path: "src/c.ts",
+                hunks: [
+                    {
+                        jumpLine: 30,
+                        newLines: 1,
+                        additions: 3,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                ],
+            },
+        ],
+    });
+}
+function buildThreeHunkModel() {
+    return buildReviewModel({
+        prompt: "change three hunks",
+        files: [
+            {
+                path: "src/a.ts",
+                hunks: [
+                    {
+                        jumpLine: 10,
+                        newLines: 1,
+                        additions: 1,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                    {
+                        jumpLine: 20,
+                        newLines: 1,
+                        additions: 2,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                    {
+                        jumpLine: 30,
+                        newLines: 1,
+                        additions: 3,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                ],
+            },
+        ],
+    });
+}
+function buildTwoTurnModel() {
+    const turns = [
+        buildReviewTurn({
+            turnId: "turn-1",
+            ordinal: 1,
+            prompt: "first change",
+            files: [
+                {
+                    path: "src/first.ts",
+                    hunks: [
+                        {
+                            jumpLine: 1,
+                            newLines: 1,
+                            additions: 1,
+                            removals: 0,
+                            toolName: "edit",
+                        },
+                    ],
+                },
+            ],
+        }),
+        buildReviewTurn({
+            turnId: "turn-2",
+            ordinal: 2,
+            prompt: "second change",
+            files: [
+                {
+                    path: "src/second.ts",
+                    hunks: [
+                        {
+                            jumpLine: 2,
+                            newLines: 2,
+                            additions: 2,
+                            removals: 1,
+                            toolName: "write",
+                        },
+                    ],
+                },
+            ],
+        }),
+    ];
+    return buildReviewModelFromTurns(turns, ["turn-1"]);
+}
+function buildBranchModel() {
+    const root = buildReviewTurn({
+        turnId: "turn-root",
+        ordinal: 1,
+        prompt: "root change",
+        files: [
+            {
+                path: "src/root.ts",
+                hunks: [
+                    {
+                        jumpLine: 1,
+                        newLines: 1,
+                        additions: 1,
+                        removals: 0,
+                        toolName: "edit",
+                    },
+                ],
+            },
+        ],
+    });
+    const child = buildReviewTurn({
+        turnId: "turn-child",
+        ordinal: 2,
+        prompt: "child change",
+        files: [
+            {
+                path: "src/child.ts",
+                hunks: [
+                    {
+                        jumpLine: 2,
+                        newLines: 1,
+                        additions: 1,
+                        removals: 0,
+                        toolName: "edit",
+                        bodyLines: ["+2 foldedNeedle"],
+                    },
+                ],
+            },
+        ],
+    });
+    root.children = [child];
+    return buildReviewModelFromRoots([root], [root, child], [root.id]);
+}
+function buildReviewModel({ prompt = "change file", files, }) {
+    const turn = buildReviewTurn({
+        turnId: "turn-1",
+        ordinal: 1,
+        prompt,
+        files,
+    });
+    return buildReviewModelFromTurns([turn], [turn.id]);
+}
+function buildReviewTurn({ turnId, ordinal, prompt, files, }) {
+    const reviewFiles = files.map((file, fileIndex) => {
+        const fileId = `${turnId}:file-${fileIndex + 1}`;
+        const hunks = file.hunks.map((hunk, hunkIndex) => ({
+            id: `${turnId}:hunk-${fileIndex + 1}-${hunkIndex + 1}`,
+            turnId,
+            fileId,
+            path: file.path,
+            entryId: `${turnId}:entry-${fileIndex + 1}-${hunkIndex + 1}`,
+            toolCallId: `${turnId}:tool-call-${fileIndex + 1}-${hunkIndex + 1}`,
+            toolName: hunk.toolName,
+            oldStart: hunk.jumpLine,
+            oldLines: hunk.newLines,
+            newStart: hunk.jumpLine,
+            newLines: hunk.newLines,
+            jumpLine: hunk.jumpLine,
+            bodyLines: hunk.bodyLines ?? [`+${hunk.jumpLine} changed`],
+            additions: hunk.additions,
+            removals: hunk.removals,
+        }));
+        return {
+            id: fileId,
+            turnId,
+            path: file.path,
+            hunks,
+            additions: hunks.reduce((total, hunk) => total + hunk.additions, 0),
+            removals: hunks.reduce((total, hunk) => total + hunk.removals, 0),
+        };
+    });
+    return {
+        id: turnId,
+        ordinal,
+        userEntryId: `${turnId}:user`,
+        parentEntryId: null,
+        timestamp: "2026-04-24T00:00:00.000Z",
+        prompt,
+        files: reviewFiles,
+        children: [],
+        additions: reviewFiles.reduce((total, file) => total + file.additions, 0),
+        removals: reviewFiles.reduce((total, file) => total + file.removals, 0),
+    };
+}
+function buildReviewModelFromTurns(turns, activeTurnIds) {
+    return buildReviewModelFromRoots(turns, turns, activeTurnIds);
+}
+function buildReviewModelFromRoots(roots, turns, activeTurnIds) {
+    return {
+        mode: SESSION_TURNS_REVIEW_MODE,
+        turns,
+        roots,
+        activeTurnIds,
+        totalFiles: turns.reduce((total, turn) => total + turn.files.length, 0),
+        totalHunks: turns.reduce((total, turn) => total +
+            turn.files.reduce((fileTotal, file) => fileTotal + file.hunks.length, 0), 0),
+        additions: turns.reduce((total, turn) => total + turn.additions, 0),
+        removals: turns.reduce((total, turn) => total + turn.removals, 0),
+    };
+}

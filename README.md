@@ -4,6 +4,15 @@ A [pi](https://pi.dev) extension package focused on better session-diff ergonomi
 
 The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations across the current pi session tree, plus practical Git changes and branch comparison modes.
 
+## Screenshots
+
+![BetterDiff session tree reviewing a pi session branch](docs/screenshots/betterdiff-session-tree.svg)
+
+<p>
+  <img src="docs/screenshots/betterdiff-git-changes.svg" alt="BetterDiff Git changes mode with staged changes above unstaged changes" width="49%">
+  <img src="docs/screenshots/betterdiff-scoped-actions.svg" alt="BetterDiff scoped actions menu for summaries and undo actions" width="49%">
+</p>
+
 ## Install
 
 Install from npm:
@@ -56,6 +65,7 @@ Then use `/diff` inside pi to open the BetterDiff review UI.
 .
 ├── .github/workflows/   # CI + release automation
 ├── docs/plan.md         # scaffold and implementation plan
+├── docs/screenshots/    # README screenshot assets
 ├── src/
 │   ├── config/          # placeholder for future config modules
 │   ├── diff/            # placeholder for future diff logic
@@ -106,7 +116,7 @@ It installs dependencies, runs the full quality pipeline, and verifies that `npm
 `.github/workflows/release.yml` runs on `v*` tags and on manual dispatch.
 It re-validates the package, creates a tarball with `npm pack`, uploads it as a workflow artifact, and attaches it to a GitHub release when triggered by a tag.
 
-> The package is currently marked `private: true` to prevent accidental npm publication while the extension is still an early prototype.
+Tagged releases publish to npm when `NPM_TOKEN` is configured; otherwise the workflow still builds and attaches the package tarball.
 
 ## Next steps
 

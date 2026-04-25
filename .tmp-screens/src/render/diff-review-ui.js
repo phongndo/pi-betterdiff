@@ -1,0 +1,2025 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { DynamicBorder, getLanguageFromPath, highlightCode, keyText, } from "@mariozechner/pi-coding-agent";
+import { matchesKey, truncateToWidth, wrapTextWithAnsi, } from "@mariozechner/pi-tui";
+const MAX_SUMMARY_BODY_CHARS = 24_000;
+const DIFF_MODE_CHOICES = [
+    {
+        kind: "session-turns",
+        label: "Session turns",
+        description: "agent edit/write history by user turn",
+        request: { kind: "session-turns" },
+    },
+    {
+        kind: "git-changes",
+        label: "Git changes",
+        description: "staged above unstaged",
+        request: { kind: "git-changes" },
+    },
+    {
+        kind: "git-branch-main",
+        label: "Current branch vs main/master",
+        description: "PR-style merge-base diff against the default branch",
+        request: { kind: "git-branch-main" },
+    },
+    {
+        kind: "git-branch-selected",
+        label: "Current branch vs selected branch…",
+        description: "pick a branch/ref as the PR-style base",
+        branchPicker: true,
+    },
+];
+export class DiffReviewComponent {
+    model;
+    cwd;
+    tui;
+    theme;
+    keybindings;
+    done;
+    modelLoader;
+    branchRefsLoader;
+    turnsById = new Map();
+    parentById = new Map();
+    childrenById = new Map();
+    activeTurnIds = new Set();
+    activeDescendantMemo = new Map();
+    foldedBranchIds = new Set();
+    foldedDetailIds = new Set();
+    visibleParentById = new Map();
+    visibleChildrenById = new Map();
+    multipleVisibleRoots = false;
+    cachedRows;
+    selectedId;
+    detailTurnId;
+    lastPageSize = 5;
+    pendingG = false;
+    pendingBracket;
+    pendingBracketTimer;
+    notice;
+    loadingMessage;
+    loadRequestId = 0;
+    actionMenu;
+    searchEditing = false;
+    searchMode = "tree";
+    searchQuery = "";
+    constructor(model, cwd, tui, theme, keybindings, done, modelLoader, branchRefsLoader) {
+        this.model = model;
+        this.cwd = cwd;
+        this.tui = tui;
+        this.theme = theme;
+        this.keybindings = keybindings;
+        this.done = done;
+        this.modelLoader = modelLoader;
+        this.branchRefsLoader = branchRefsLoader;
+        this.indexModel();
+        this.foldDetailHunksByDefault();
+        const initialTurnId = this.preferredHeadTurnId();
+        this.detailTurnId = initialTurnId;
+        this.selectedId = initialTurnId;
+        this.expandDetailRowsForTurn(initialTurnId);
+    }
+    invalidate() {
+        this.invalidateRows();
+    }
+    render(width) {
+        const lines = [];
+        const border = new DynamicBorder((text) => this.theme.fg("border", text));
+        lines.push("");
+        lines.push(...border.render(width));
+        lines.push(truncateToWidth(`  ${this.theme.bold(`Better Diff — ${this.model.mode.label}`)} ${this.summaryText()}`, width));
+        if (this.model.mode.description) {
+            lines.push(truncateToWidth(this.theme.fg("muted", `  ${this.model.mode.description}`), width));
+        }
+        lines.push(truncateToWidth(this.theme.fg("muted", `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. /: search. ?: grep all. n/N: next/prev. m: mode. r: refresh. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`), width));
+        if (this.loadingMessage) {
+            lines.push(truncateToWidth(`  ${this.theme.fg("muted", this.loadingMessage)}`, width));
+        }
+        if (this.notice) {
+            lines.push(truncateToWidth(`  ${this.theme.fg("warning", this.notice)}`, width));
+        }
+        const searchLine = this.renderSearchLine(width);
+        if (searchLine)
+            lines.push(searchLine);
+        lines.push(...this.renderActionMenu(width));
+        lines.push(...border.render(width));
+        lines.push("");
+        if (this.model.turns.length === 0) {
+            lines.push(truncateToWidth(this.theme.fg("muted", `  ${this.model.mode.emptyTitle}`), width));
+            if (this.model.mode.emptyHint) {
+                lines.push(truncateToWidth(this.theme.fg("muted", `  ${this.model.mode.emptyHint}`), width));
+            }
+            lines.push("");
+            lines.push(...border.render(width));
+            return lines;
+        }
+        let rows = this.getRows();
+        this.ensureSelectionVisible(rows);
+        rows = this.getRows();
+        const maxBodyLines = this.getBodyBudgetLines(width);
+        this.lastPageSize = Math.max(1, maxBodyLines - 1);
+        const selectedRowIndex = Math.max(0, rows.findIndex((row) => row.id === this.selectedId));
+        const startIndex = Math.max(0, Math.min(selectedRowIndex - Math.floor(maxBodyLines / 2), rows.length - maxBodyLines));
+        const endIndex = Math.min(rows.length, startIndex + maxBodyLines);
+        for (let index = startIndex; index < endIndex; index++) {
+            const row = rows[index];
+            if (!row)
+                continue;
+            lines.push(this.renderRow(row, width));
+        }
+        lines.push(truncateToWidth(this.theme.fg("muted", this.statusText()), width));
+        lines.push("");
+        lines.push(...border.render(width));
+        return lines;
+    }
+    getBodyBudgetLines(width) {
+        const reservedLines = 9 +
+            (this.model.mode.description ? 1 : 0) +
+            (this.loadingMessage ? 1 : 0) +
+            (this.notice ? 1 : 0) +
+            (this.hasSearchLine() ? 1 : 0) +
+            this.getActionMenuLineCount(width);
+        return Math.max(5, this.tui.terminal.rows - reservedLines);
+    }
+    getActionMenuLineCount(width) {
+        const menu = this.actionMenu;
+        if (!menu)
+            return 0;
+        return menu.items.length + 2 + this.getActionMenuPromptLineCount(width);
+    }
+    getActionMenuPromptLineCount(width) {
+        const prompt = this.actionMenu?.prompt.trim();
+        if (!prompt)
+            return 0;
+        return (1 + wrapTextWithAnsi(prompt, this.getActionMenuPromptWidth(width)).length);
+    }
+    getActionMenuPromptWidth(width) {
+        return Math.max(10, width - 4);
+    }
+    renderSearchLine(width) {
+        if (!this.hasSearchLine())
+            return undefined;
+        const { total, selectedIndex } = this.searchStatus();
+        const label = this.searchMode === "grep" ? "Grep all:" : "Search:";
+        const query = this.searchQuery
+            ? this.theme.fg("accent", this.searchQuery)
+            : this.theme.fg("muted", "(type query)");
+        const cursor = this.searchEditing ? this.theme.fg("accent", "▌") : "";
+        const countText = this.searchQuery.trim().length === 0
+            ? ""
+            : total === 0
+                ? "no matches"
+                : selectedIndex === undefined
+                    ? `${total} match${total === 1 ? "" : "es"}`
+                    : `${selectedIndex + 1}/${total}`;
+        const hint = this.searchEditing
+            ? "enter: keep. esc: close."
+            : `n/N: next/prev. ${this.searchMode === "grep" ? "?: edit grep." : "/: edit search."}`;
+        const suffix = [countText, hint].filter(Boolean).join(" · ");
+        return truncateToWidth(`  ${this.theme.fg("muted", label)} ${query}${cursor}${suffix ? this.theme.fg("muted", `  ${suffix}`) : ""}`, width);
+    }
+    hasSearchLine() {
+        return this.searchEditing || this.searchQuery.length > 0;
+    }
+    renderActionMenu(width) {
+        const menu = this.actionMenu;
+        if (!menu)
+            return [];
+        const lines = [];
+        lines.push(truncateToWidth(`  ${this.theme.bold("Actions")} ${this.theme.fg("muted", "·")} ${this.theme.fg("accent", menu.title)}`, width));
+        const prompt = menu.prompt.trim();
+        if (prompt) {
+            lines.push(truncateToWidth(this.theme.fg("muted", "  Prompt:"), width));
+            for (const promptLine of wrapTextWithAnsi(prompt, this.getActionMenuPromptWidth(width))) {
+                lines.push(truncateToWidth(`    ${this.theme.fg("text", promptLine)}`, width));
+            }
+        }
+        for (let index = 0; index < menu.items.length; index++) {
+            const item = menu.items[index];
+            if (!item)
+                continue;
+            const selected = index === menu.selectedIndex;
+            const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
+            const label = selected ? this.theme.bold(item.label) : item.label;
+            let line = `  ${cursor}${label}${this.theme.fg("muted", ` — ${item.description}`)}`;
+            if (selected)
+                line = this.theme.bg("selectedBg", line);
+            lines.push(truncateToWidth(line, width));
+        }
+        lines.push(truncateToWidth(this.theme.fg("muted", "  ↑/↓ or j/k: move. enter: run action. esc/q: back."), width));
+        return lines;
+    }
+    ensureSelectionVisible(rows) {
+        if (rows.some((row) => row.selectable && row.id === this.selectedId)) {
+            return;
+        }
+        const preferredHeadId = this.preferredHeadTurnId();
+        const preferredRow = rows.find((row) => row.id === preferredHeadId);
+        this.selectRow(preferredRow?.id ?? rows[rows.length - 1]?.id);
+    }
+    setPendingBracket(bracket) {
+        this.clearPendingBracket();
+        this.pendingBracket = bracket;
+        this.pendingBracketTimer = setTimeout(() => {
+            const pendingBracket = this.consumePendingBracket();
+            if (!pendingBracket)
+                return;
+            this.moveToHunk(pendingBracket === "]" ? 1 : -1);
+            this.tui.requestRender();
+        }, 160);
+    }
+    consumePendingBracket() {
+        const pendingBracket = this.pendingBracket;
+        this.clearPendingBracket();
+        return pendingBracket;
+    }
+    clearPendingBracket() {
+        if (this.pendingBracketTimer) {
+            clearTimeout(this.pendingBracketTimer);
+            this.pendingBracketTimer = undefined;
+        }
+        this.pendingBracket = undefined;
+    }
+    handleInput(data) {
+        this.notice = undefined;
+        if (this.actionMenu) {
+            this.clearPendingBracket();
+            this.pendingG = false;
+            this.handleActionMenuInput(data);
+            return;
+        }
+        if (this.searchEditing) {
+            this.clearPendingBracket();
+            this.pendingG = false;
+            this.handleSearchInput(data);
+            return;
+        }
+        if (this.searchQuery.length > 0 && this.matchesCancel(data)) {
+            this.clearPendingBracket();
+            this.pendingG = false;
+            this.clearSearch();
+            this.tui.requestRender();
+            return;
+        }
+        if (this.pendingBracket &&
+            (this.matchesCancel(data) || data === "q" || data === "Q")) {
+            this.clearPendingBracket();
+        }
+        const pendingBracket = this.consumePendingBracket();
+        if (pendingBracket && (data === "f" || data === "F")) {
+            this.moveToFile(pendingBracket === "]" ? 1 : -1);
+            this.pendingG = false;
+            this.tui.requestRender();
+            return;
+        }
+        if (pendingBracket) {
+            this.moveToHunk(pendingBracket === "]" ? 1 : -1);
+        }
+        if (this.matchesCancel(data)) {
+            this.done({ type: "close" });
+            return;
+        }
+        if (data === "q" || data === "Q") {
+            this.done({ type: "close" });
+            return;
+        }
+        if (data === "/") {
+            this.openSearch("tree");
+            this.tui.requestRender();
+            return;
+        }
+        if (data === "?") {
+            this.openSearch("grep");
+            this.tui.requestRender();
+            return;
+        }
+        if (data === "\t") {
+            this.toggleTurnFileJump();
+            this.tui.requestRender();
+            return;
+        }
+        if (this.matchesExternalEditor(data)) {
+            this.openSelectedHunk();
+            this.tui.requestRender(true);
+            return;
+        }
+        if (data === "m" || data === "M") {
+            this.openModeMenu();
+            this.tui.requestRender();
+            return;
+        }
+        if (data === "r" || data === "R") {
+            this.refreshCurrentMode();
+            this.tui.requestRender();
+            return;
+        }
+        if (this.matchesSelectUp(data) || data === "k") {
+            this.moveSelection(-1);
+        }
+        else if (this.matchesSelectDown(data) || data === "j") {
+            this.moveSelection(1);
+        }
+        else if (data === "n") {
+            this.moveSearch(1);
+        }
+        else if (data === "N") {
+            this.moveSearch(-1);
+        }
+        else if (this.matchesPageUp(data) || matchesKey(data, "ctrl+u")) {
+            this.moveSelection(-Math.max(1, this.lastPageSize));
+        }
+        else if (this.matchesPageDown(data) || matchesKey(data, "ctrl+d")) {
+            this.moveSelection(Math.max(1, this.lastPageSize));
+        }
+        else if (this.matchesConfirm(data)) {
+            this.openActionMenu();
+        }
+        else if (data === "h" ||
+            this.keybindings.matches(data, "app.tree.foldOrUp")) {
+            this.moveParentOrCollapse();
+        }
+        else if (data === "l" ||
+            this.keybindings.matches(data, "app.tree.unfoldOrDown")) {
+            this.moveChildOrExpand();
+        }
+        else if (data === "c" || data === "C") {
+            this.collapseSelectedScope();
+        }
+        else if (data === "e" || data === "E") {
+            this.expandSelectedScope();
+        }
+        else if (data === "]" || data === "[") {
+            this.setPendingBracket(data);
+            this.pendingG = false;
+            this.tui.requestRender();
+            return;
+        }
+        else if (data === "G") {
+            this.selectLast();
+        }
+        else if (data === "g") {
+            if (this.pendingG) {
+                this.selectFirst();
+                this.pendingG = false;
+            }
+            else {
+                this.pendingG = true;
+            }
+            this.tui.requestRender();
+            return;
+        }
+        else if (matchesKey(data, "left")) {
+            this.moveSelection(-Math.max(1, this.lastPageSize));
+        }
+        else if (matchesKey(data, "right")) {
+            this.moveSelection(Math.max(1, this.lastPageSize));
+        }
+        else {
+            this.pendingG = false;
+            return;
+        }
+        this.pendingG = false;
+        this.tui.requestRender();
+    }
+    handleActionMenuInput(data) {
+        if (this.matchesExternalEditor(data)) {
+            this.actionMenu = undefined;
+            this.openSelectedHunk();
+            this.tui.requestRender(true);
+            return;
+        }
+        if (this.matchesCancel(data) || data === "q" || data === "Q") {
+            this.actionMenu = undefined;
+            this.tui.requestRender();
+            return;
+        }
+        if (this.matchesSelectUp(data) || data === "k") {
+            this.moveActionMenuSelection(-1);
+        }
+        else if (this.matchesSelectDown(data) || data === "j") {
+            this.moveActionMenuSelection(1);
+        }
+        else if (this.matchesConfirm(data)) {
+            this.runSelectedActionMenuItem();
+        }
+        else {
+            return;
+        }
+        this.tui.requestRender();
+    }
+    handleSearchInput(data) {
+        if (this.matchesCancel(data)) {
+            this.clearSearch();
+            this.tui.requestRender();
+            return;
+        }
+        if (this.matchesConfirm(data)) {
+            this.searchEditing = false;
+            if (this.searchQuery.trim().length === 0) {
+                this.searchQuery = "";
+            }
+            else if (this.searchMatches().length === 0) {
+                this.notice = `No matches for "${this.searchQuery}".`;
+            }
+            this.tui.requestRender();
+            return;
+        }
+        if (this.matchesDeleteBackward(data)) {
+            const chars = [...this.searchQuery];
+            chars.pop();
+            this.searchQuery = chars.join("");
+            this.selectCurrentSearchMatch();
+            this.tui.requestRender();
+            return;
+        }
+        if (!isPrintableInput(data))
+            return;
+        this.searchQuery += data;
+        this.selectCurrentSearchMatch();
+        this.tui.requestRender();
+    }
+    openSearch(mode) {
+        this.searchMode = mode;
+        this.searchEditing = true;
+        this.searchQuery = "";
+        this.notice = undefined;
+        this.selectCurrentSearchMatch();
+    }
+    clearSearch() {
+        this.searchEditing = false;
+        this.searchQuery = "";
+    }
+    moveActionMenuSelection(delta) {
+        const menu = this.actionMenu;
+        if (!menu || menu.items.length === 0)
+            return;
+        menu.selectedIndex = clamp(menu.selectedIndex + delta, 0, menu.items.length - 1);
+    }
+    runSelectedActionMenuItem() {
+        const menu = this.actionMenu;
+        if (!menu)
+            return;
+        const item = menu.items[menu.selectedIndex];
+        if (!item)
+            return;
+        this.actionMenu = undefined;
+        item.run();
+    }
+    openActionMenu() {
+        const row = this.getSelectedRow();
+        if (!row) {
+            this.notice = "No diff row is selected.";
+            return;
+        }
+        const items = this.actionMenuItemsForRow(row);
+        if (items.length === 0) {
+            this.notice = "No actions available for this row.";
+            return;
+        }
+        this.actionMenu = {
+            title: this.actionMenuTitle(row),
+            prompt: row.turn.prompt || "(empty prompt)",
+            items,
+            selectedIndex: 0,
+        };
+    }
+    openModeMenu() {
+        const items = DIFF_MODE_CHOICES.map((choice) => {
+            const current = choice.kind === this.model.mode.kind;
+            return {
+                id: `mode-${choice.kind}`,
+                label: `${current ? "✓ " : "  "}${choice.label}`,
+                description: choice.description,
+                run: () => {
+                    if (choice.branchPicker) {
+                        this.openBranchRefMenu();
+                        return;
+                    }
+                    if (current || !choice.request)
+                        return;
+                    this.switchMode(choice.request);
+                },
+            };
+        });
+        const selectedIndex = Math.max(0, DIFF_MODE_CHOICES.findIndex((choice) => choice.kind === this.model.mode.kind));
+        this.actionMenu = {
+            title: "diff mode",
+            prompt: `Current mode: ${this.model.mode.label}`,
+            items,
+            selectedIndex,
+        };
+    }
+    refreshCurrentMode() {
+        const request = this.currentLoadRequest();
+        if (!request)
+            return;
+        this.switchMode(request);
+    }
+    currentLoadRequest() {
+        if (this.model.mode.kind === "git-branch-selected") {
+            const baseRef = this.model.mode.baseRef;
+            if (!baseRef) {
+                this.openBranchRefMenu();
+                return undefined;
+            }
+            return { kind: "git-branch-selected", baseRef };
+        }
+        return { kind: this.model.mode.kind };
+    }
+    openBranchRefMenu() {
+        if (!this.branchRefsLoader) {
+            this.notice = "Branch selection is unavailable in this context.";
+            return;
+        }
+        const requestId = this.loadRequestId + 1;
+        this.loadRequestId = requestId;
+        this.actionMenu = undefined;
+        this.loadingMessage = "Loading git branches…";
+        this.notice = undefined;
+        void this.branchRefsLoader()
+            .then((refs) => {
+            if (requestId !== this.loadRequestId)
+                return;
+            if (refs.length === 0) {
+                this.notice = "No git branches or refs found.";
+                return;
+            }
+            this.actionMenu = {
+                title: "base branch/ref",
+                prompt: "Select the base branch/ref. BetterDiff will compare merge-base(base, current branch) → current branch.",
+                items: refs.map((ref) => ({
+                    id: `branch-${ref}`,
+                    label: ref,
+                    description: `current branch vs ${ref}`,
+                    run: () => this.switchMode({ kind: "git-branch-selected", baseRef: ref }),
+                })),
+                selectedIndex: 0,
+            };
+        })
+            .catch((error) => {
+            if (requestId !== this.loadRequestId)
+                return;
+            this.notice = `Failed to load git branches: ${error instanceof Error ? error.message : String(error)}`;
+        })
+            .finally(() => {
+            if (requestId !== this.loadRequestId)
+                return;
+            this.loadingMessage = undefined;
+            this.tui.requestRender();
+        });
+    }
+    switchMode(request) {
+        if (!this.modelLoader) {
+            this.notice = "Diff mode switching is unavailable in this context.";
+            return;
+        }
+        const label = requestLabel(request);
+        const requestId = this.loadRequestId + 1;
+        this.loadRequestId = requestId;
+        this.actionMenu = undefined;
+        this.loadingMessage = `Loading ${label} diff…`;
+        this.notice = undefined;
+        void this.modelLoader(request)
+            .then((model) => {
+            if (requestId !== this.loadRequestId)
+                return;
+            this.replaceModel(model);
+        })
+            .catch((error) => {
+            if (requestId !== this.loadRequestId)
+                return;
+            this.notice = `Failed to load ${label}: ${error instanceof Error ? error.message : String(error)}`;
+        })
+            .finally(() => {
+            if (requestId !== this.loadRequestId)
+                return;
+            this.loadingMessage = undefined;
+            this.tui.requestRender();
+        });
+    }
+    replaceModel(model) {
+        this.model = model;
+        this.turnsById.clear();
+        this.parentById.clear();
+        this.childrenById.clear();
+        this.activeTurnIds.clear();
+        this.activeDescendantMemo.clear();
+        this.foldedBranchIds.clear();
+        this.foldedDetailIds.clear();
+        this.visibleParentById = new Map();
+        this.visibleChildrenById = new Map();
+        this.multipleVisibleRoots = false;
+        this.cachedRows = undefined;
+        this.selectedId = undefined;
+        this.detailTurnId = undefined;
+        this.pendingG = false;
+        this.clearPendingBracket();
+        this.actionMenu = undefined;
+        this.searchEditing = false;
+        this.searchMode = "tree";
+        this.searchQuery = "";
+        this.indexModel();
+        this.foldDetailHunksByDefault();
+        const initialTurnId = this.preferredHeadTurnId();
+        this.detailTurnId = initialTurnId;
+        this.selectedId = initialTurnId;
+        this.expandDetailRowsForTurn(initialTurnId);
+        this.invalidateRows();
+    }
+    actionMenuTitle(row) {
+        if (row.kind === "turn")
+            return `turn ${row.turn.ordinal}`;
+        if (row.kind === "file")
+            return `file ${row.file.path}`;
+        if (row.kind === "hunk")
+            return `hunk ${row.hunk.path}:${row.hunk.jumpLine}`;
+        return `diff line ${row.hunk.path}:${row.hunk.jumpLine}`;
+    }
+    actionMenuItemsForRow(row) {
+        const items = [
+            {
+                id: "summarize-scope",
+                label: "Generate summary",
+                description: "Ask the agent to summarize this selected diff scope",
+                run: () => this.done({
+                    type: "summarize",
+                    custom: false,
+                    summary: this.summaryRequestForRow(row),
+                }),
+            },
+            {
+                id: "custom-summarize-scope",
+                label: "Custom summary…",
+                description: "Add focus instructions before generating the summary",
+                run: () => this.done({
+                    type: "summarize",
+                    custom: true,
+                    summary: this.summaryRequestForRow(row),
+                }),
+            },
+        ];
+        if (row.kind === "hunk" || row.kind === "diff") {
+            this.addUndoAction(items, "undo-hunk", "Undo this hunk", row.hunk.path, [
+                row.hunk,
+            ]);
+        }
+        if (row.kind === "file" || row.kind === "hunk" || row.kind === "diff") {
+            this.addUndoAction(items, "undo-file-in-turn", "Undo this file in this turn", row.file.path, row.file.hunks);
+        }
+        this.addUndoAction(items, "undo-turn", "Undo this turn", this.turnLabel(row.turn), this.hunksForTurn(row.turn));
+        return items;
+    }
+    summaryRequestForRow(row) {
+        return {
+            title: this.summaryTitleForRow(row),
+            body: truncateSummaryBody(this.summaryBodyForRow(row)),
+        };
+    }
+    summaryTitleForRow(row) {
+        if (row.kind === "turn") {
+            return `turn ${row.turn.ordinal}: ${row.turn.prompt || "(empty prompt)"}`;
+        }
+        return this.actionMenuTitle(row);
+    }
+    summaryBodyForRow(row) {
+        if (row.kind === "turn")
+            return this.summaryForTurn(row.turn);
+        if (row.kind === "file")
+            return this.summaryForFile(row.file, row.turn);
+        if (row.kind === "hunk")
+            return this.summaryForHunk(row.hunk, row.file, row.turn);
+        return this.summaryForHunk(row.hunk, row.file, row.turn);
+    }
+    summaryForTurn(turn) {
+        return [
+            `Scope: turn ${turn.ordinal}`,
+            `Prompt: ${turn.prompt || "(empty prompt)"}`,
+            `Stats: +${turn.additions} -${turn.removals}`,
+            `Files: ${turn.files.length}`,
+            "",
+            ...turn.files.flatMap((file) => this.summaryLinesForFile(file)),
+        ].join("\n");
+    }
+    summaryForFile(file, turn) {
+        return [
+            `Scope: file ${file.path}`,
+            `Turn: ${turn.prompt || "(empty prompt)"}`,
+            `Stats: +${file.additions} -${file.removals}`,
+            "",
+            ...this.summaryLinesForFile(file),
+        ].join("\n");
+    }
+    summaryForHunk(hunk, file, turn) {
+        return [
+            `Scope: hunk ${hunk.path}:${hunk.jumpLine}`,
+            `Turn: ${turn.prompt || "(empty prompt)"}`,
+            `File: ${file.path}`,
+            `Tool: ${hunk.toolName}`,
+            `Stats: +${hunk.additions} -${hunk.removals}`,
+            "",
+            ...this.summaryLinesForHunk(hunk),
+        ].join("\n");
+    }
+    summaryLinesForFile(file) {
+        return [
+            `File: ${file.path} (+${file.additions} -${file.removals}, ${file.hunks.length} hunk${file.hunks.length === 1 ? "" : "s"})`,
+            ...file.hunks.flatMap((hunk) => this.summaryLinesForHunk(hunk)),
+            "",
+        ];
+    }
+    summaryLinesForHunk(hunk) {
+        return [
+            `  Hunk: ${hunk.path}:${hunk.jumpLine} ${hunk.toolName} (+${hunk.additions} -${hunk.removals})`,
+            ...hunk.bodyLines.map((line) => `    ${line}`),
+        ];
+    }
+    addUndoAction(items, id, label, description, hunks) {
+        const reversibleHunks = this.reversibleHunks(hunks);
+        if (reversibleHunks.length === 0)
+            return;
+        items.push({
+            id,
+            label,
+            description: `${description} · ${this.undoSummary(reversibleHunks)}`,
+            run: () => this.showUndoConfirmation(label, reversibleHunks),
+        });
+    }
+    showUndoConfirmation(label, hunks) {
+        this.actionMenu = {
+            title: `confirm ${label.toLowerCase()}`,
+            prompt: this.actionMenu?.prompt ?? "",
+            selectedIndex: 0,
+            items: [
+                {
+                    id: "confirm-undo",
+                    label: `Confirm ${label.toLowerCase()}`,
+                    description: `Reverse ${this.undoSummary(hunks)} in the working tree`,
+                    run: () => this.undoHunks(hunks, label),
+                },
+                {
+                    id: "cancel-undo",
+                    label: "Cancel",
+                    description: "Leave files unchanged",
+                    run: () => { },
+                },
+            ],
+        };
+    }
+    undoHunks(hunks, label) {
+        try {
+            const result = undoEditHunks(this.cwd, hunks);
+            this.notice = `${label}: reversed ${result.hunks} edit hunk${result.hunks === 1 ? "" : "s"} in ${result.files} file${result.files === 1 ? "" : "s"}.`;
+        }
+        catch (error) {
+            this.notice = `Undo failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+    }
+    reversibleHunks(hunks) {
+        return hunks.filter((hunk) => hunk.toolName === "edit");
+    }
+    undoSummary(hunks) {
+        const paths = new Set(hunks.map((hunk) => hunk.path));
+        return `${hunks.length} edit hunk${hunks.length === 1 ? "" : "s"} / ${paths.size} file${paths.size === 1 ? "" : "s"}`;
+    }
+    hunksForTurn(turn) {
+        return turn.files.flatMap((file) => file.hunks);
+    }
+    matchesConfirm(data) {
+        return (this.keybindings.matches(data, "tui.select.confirm") ||
+            matchesKey(data, "enter"));
+    }
+    matchesCancel(data) {
+        return (this.keybindings.matches(data, "tui.select.cancel") ||
+            matchesKey(data, "escape") ||
+            matchesKey(data, "ctrl+c"));
+    }
+    matchesSelectUp(data) {
+        return (this.keybindings.matches(data, "tui.select.up") || matchesKey(data, "up"));
+    }
+    matchesSelectDown(data) {
+        return (this.keybindings.matches(data, "tui.select.down") ||
+            matchesKey(data, "down"));
+    }
+    matchesPageUp(data) {
+        return (this.keybindings.matches(data, "tui.select.pageUp") ||
+            matchesKey(data, "pageUp"));
+    }
+    matchesPageDown(data) {
+        return (this.keybindings.matches(data, "tui.select.pageDown") ||
+            matchesKey(data, "pageDown"));
+    }
+    matchesExternalEditor(data) {
+        if (matchesKey(data, "enter"))
+            return false;
+        return (this.keybindings.matches(data, "app.editor.external") ||
+            matchesKey(data, "ctrl+g"));
+    }
+    matchesDeleteBackward(data) {
+        return (this.keybindings.matches(data, "tui.editor.deleteCharBackward") ||
+            matchesKey(data, "backspace"));
+    }
+    indexModel() {
+        for (const turnId of this.model.activeTurnIds) {
+            this.activeTurnIds.add(turnId);
+        }
+        for (const root of this.model.roots) {
+            this.addTurnAndChildren(root, undefined);
+        }
+        for (const turn of this.model.turns) {
+            if (!this.turnsById.has(turn.id)) {
+                this.addTurnAndChildren(turn, undefined);
+            }
+        }
+    }
+    foldDetailHunksByDefault() { }
+    expandDetailRowsForTurn(turnId) {
+        const turn = turnId ? this.turnsById.get(turnId) : undefined;
+        if (!turn)
+            return;
+        for (const file of turn.files) {
+            this.foldedDetailIds.delete(file.id);
+        }
+    }
+    addTurnAndChildren(turn, parentId) {
+        if (this.turnsById.has(turn.id))
+            return;
+        this.turnsById.set(turn.id, turn);
+        this.parentById.set(turn.id, parentId);
+        this.childrenById.set(turn.id, turn.children.map((child) => child.id));
+        for (const child of turn.children) {
+            this.addTurnAndChildren(child, turn.id);
+        }
+    }
+    preferredHeadTurnId() {
+        return (this.model.activeTurnIds[this.model.activeTurnIds.length - 1] ??
+            this.model.turns[this.model.turns.length - 1]?.id);
+    }
+    getRows() {
+        this.cachedRows ??= this.buildRows();
+        return this.cachedRows;
+    }
+    invalidateRows() {
+        this.cachedRows = undefined;
+    }
+    buildRows() {
+        const rows = [];
+        const rootIds = this.model.roots.map((root) => root.id);
+        const orderedRootIds = this.sortActiveFirst(rootIds);
+        this.visibleParentById = new Map();
+        this.visibleChildrenById = new Map();
+        this.visibleChildrenById.set(undefined, orderedRootIds);
+        this.multipleVisibleRoots = orderedRootIds.length > 1;
+        for (let index = 0; index < orderedRootIds.length; index++) {
+            const rootId = orderedRootIds[index];
+            if (!rootId)
+                continue;
+            this.addTurnRows(rows, rootId, this.multipleVisibleRoots ? 1 : 0, this.multipleVisibleRoots, this.multipleVisibleRoots, index === orderedRootIds.length - 1, [], this.multipleVisibleRoots, undefined);
+        }
+        return rows;
+    }
+    addTurnRows(rows, turnId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild, visibleParentId) {
+        const turn = this.turnsById.get(turnId);
+        if (!turn)
+            return;
+        this.visibleParentById.set(turnId, visibleParentId);
+        const turnRow = {
+            id: turn.id,
+            kind: "turn",
+            selectable: true,
+            turn,
+            indent,
+            showConnector,
+            isLast,
+            gutters: [...gutters],
+            isVirtualRootChild,
+        };
+        rows.push(turnRow);
+        if (this.detailTurnId === turn.id ||
+            this.model.mode.kind === "git-changes") {
+            this.addDetailRows(rows, turn, turnRow);
+        }
+        const childIds = this.sortActiveFirst(this.childrenById.get(turn.id) ?? []);
+        this.visibleChildrenById.set(turnId, childIds);
+        if (this.foldedBranchIds.has(turn.id))
+            return;
+        const multipleChildren = childIds.length > 1;
+        const childIndent = multipleChildren
+            ? indent + 1
+            : justBranched && indent > 0
+                ? indent + 1
+                : indent;
+        const connectorDisplayed = showConnector && !isVirtualRootChild;
+        const currentDisplayIndent = this.multipleVisibleRoots
+            ? Math.max(0, indent - 1)
+            : indent;
+        const connectorPosition = Math.max(0, currentDisplayIndent - 1);
+        const childGutters = connectorDisplayed
+            ? [...gutters, { position: connectorPosition, show: !isLast }]
+            : gutters;
+        for (let index = 0; index < childIds.length; index++) {
+            const childId = childIds[index];
+            if (!childId)
+                continue;
+            this.addTurnRows(rows, childId, childIndent, multipleChildren, multipleChildren, index === childIds.length - 1, childGutters, false, turn.id);
+        }
+    }
+    addDetailRows(rows, turn, turnRow) {
+        const basePrefix = this.prefixForTurnChildRows(turnRow);
+        for (let fileIndex = 0; fileIndex < turn.files.length; fileIndex++) {
+            const file = turn.files[fileIndex];
+            if (!file)
+                continue;
+            const fileIsLast = fileIndex === turn.files.length - 1;
+            const filePrefix = `${basePrefix}${fileIsLast ? "└─ " : "├─ "}`;
+            const fileChildPrefix = `${basePrefix}${fileIsLast ? "   " : "│  "}`;
+            rows.push({
+                id: file.id,
+                kind: "file",
+                selectable: true,
+                turn,
+                prefix: filePrefix,
+                file,
+            });
+            if (this.foldedDetailIds.has(file.id))
+                continue;
+            for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
+                const hunk = file.hunks[hunkIndex];
+                if (!hunk)
+                    continue;
+                const hunkIsLast = hunkIndex === file.hunks.length - 1;
+                const hunkPrefix = `${fileChildPrefix}${hunkIsLast ? "└─ " : "├─ "}`;
+                const diffPrefix = `${fileChildPrefix}${hunkIsLast ? "   " : "│  "}`;
+                rows.push({
+                    id: hunk.id,
+                    kind: "hunk",
+                    selectable: true,
+                    turn,
+                    prefix: hunkPrefix,
+                    file,
+                    hunk,
+                });
+                for (let index = 0; index < hunk.bodyLines.length; index++) {
+                    rows.push({
+                        id: diffLineRowId(hunk, index),
+                        kind: "diff",
+                        selectable: true,
+                        turn,
+                        prefix: diffPrefix,
+                        file,
+                        hunk,
+                        text: hunk.bodyLines[index] ?? "",
+                    });
+                }
+            }
+        }
+    }
+    sortActiveFirst(ids) {
+        if (this.model.mode.kind !== "session-turns")
+            return [...ids];
+        return [...ids].sort((left, right) => {
+            const leftActive = this.subtreeContainsActiveTurn(left);
+            const rightActive = this.subtreeContainsActiveTurn(right);
+            return Number(rightActive) - Number(leftActive);
+        });
+    }
+    subtreeContainsActiveTurn(turnId) {
+        const cached = this.activeDescendantMemo.get(turnId);
+        if (cached !== undefined)
+            return cached;
+        const contains = this.activeTurnIds.has(turnId) ||
+            (this.childrenById.get(turnId) ?? []).some((childId) => this.subtreeContainsActiveTurn(childId));
+        this.activeDescendantMemo.set(turnId, contains);
+        return contains;
+    }
+    renderRow(row, width) {
+        if (row.kind === "turn")
+            return this.renderTurnRow(row, width);
+        return this.renderDetailRow(row, width);
+    }
+    renderTurnRow(row, width) {
+        const selected = row.id === this.selectedId;
+        const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
+        const prefix = this.theme.fg("dim", this.prefixForTurnRow(row));
+        const foldMarker = this.rootFoldMarker(row);
+        const pathMarker = this.model.mode.kind === "session-turns" && this.activeTurnIds.has(row.id)
+            ? this.theme.fg("accent", "• ")
+            : "";
+        const label = this.turnLabelParts(row.turn);
+        const text = `${foldMarker}${pathMarker}${label.prefix ? this.theme.fg("accent", label.prefix) : ""}${this.theme.fg("text", label.prompt)} ${this.statText(row.turn)} ${this.fileHunkText(row.turn)}`;
+        let line = cursor + prefix + (selected ? this.theme.bold(text) : text);
+        if (selected)
+            line = this.theme.bg("selectedBg", line);
+        return truncateToWidth(line, width);
+    }
+    prefixForTurnRow(row) {
+        const displayIndent = this.displayIndentForTurn(row);
+        const connector = row.showConnector && !row.isVirtualRootChild;
+        const connectorPosition = connector ? displayIndent - 1 : -1;
+        const totalChars = displayIndent * 3;
+        const prefixChars = [];
+        const isFolded = this.foldedBranchIds.has(row.id);
+        for (let index = 0; index < totalChars; index++) {
+            const level = Math.floor(index / 3);
+            const posInLevel = index % 3;
+            const gutter = row.gutters.find((candidate) => candidate.position === level);
+            if (gutter) {
+                prefixChars.push(posInLevel === 0 && gutter.show ? "│" : " ");
+            }
+            else if (connector && level === connectorPosition) {
+                if (posInLevel === 0) {
+                    prefixChars.push(row.isLast ? "└" : "├");
+                }
+                else if (posInLevel === 1) {
+                    prefixChars.push(isFolded ? "⊞" : this.isBranchFoldable(row.id) ? "⊟" : "─");
+                }
+                else {
+                    prefixChars.push(" ");
+                }
+            }
+            else {
+                prefixChars.push(" ");
+            }
+        }
+        return prefixChars.join("");
+    }
+    prefixForTurnChildRows(row) {
+        const displayIndent = this.displayIndentForTurn(row);
+        const connector = row.showConnector && !row.isVirtualRootChild;
+        const connectorPosition = connector ? displayIndent - 1 : -1;
+        const segments = [];
+        for (let level = 0; level < displayIndent; level++) {
+            const gutter = row.gutters.find((candidate) => candidate.position === level);
+            if (gutter) {
+                segments.push(gutter.show ? "│  " : "   ");
+            }
+            else if (connector && level === connectorPosition) {
+                segments.push(row.isLast ? "   " : "│  ");
+            }
+            else {
+                segments.push("   ");
+            }
+        }
+        return segments.join("");
+    }
+    displayIndentForTurn(row) {
+        return this.multipleVisibleRoots ? Math.max(0, row.indent - 1) : row.indent;
+    }
+    rootFoldMarker(row) {
+        const showsFoldInConnector = row.showConnector && !row.isVirtualRootChild;
+        if (!this.foldedBranchIds.has(row.id) || showsFoldInConnector)
+            return "";
+        return this.theme.fg("accent", "⊞ ");
+    }
+    renderDetailRow(row, width) {
+        const selected = row.id === this.selectedId;
+        const cursor = selected ? this.theme.fg("accent", "› ") : "  ";
+        const prefix = this.theme.fg("dim", row.prefix);
+        let content;
+        if (row.kind === "file") {
+            content = `${this.detailFoldMarker(row)}${this.theme.fg("toolTitle", row.file.path)} ${this.statText(row.file)} ${this.hunkCountText(row.file.hunks.length)}`;
+        }
+        else if (row.kind === "hunk") {
+            content = `${this.detailFoldMarker(row)}${this.formatHunkLabel(row.hunk)} ${this.theme.fg("dim", row.hunk.path)}`;
+        }
+        else {
+            content = `  ${this.renderDiffLine(row.text, row.hunk.path)}`;
+        }
+        let line = cursor + prefix + content;
+        if (selected)
+            line = this.theme.bg("selectedBg", line);
+        return truncateToWidth(line, width);
+    }
+    detailFoldMarker(row) {
+        if (!this.isDetailFoldable(row))
+            return "  ";
+        return this.foldedDetailIds.has(row.id)
+            ? this.theme.fg("accent", "⊞ ")
+            : this.theme.fg("accent", "⊟ ");
+    }
+    formatHunkLabel(hunk) {
+        return [
+            this.formatHunkRegion(hunk),
+            this.theme.fg("warning", hunk.toolName),
+            this.statText(hunk),
+        ].join("  ");
+    }
+    formatHunkRegion(hunk) {
+        const { end, label, start } = this.hunkRegion(hunk);
+        return end === start
+            ? `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}`
+            : `${this.theme.fg("muted", `${label} `)}${this.theme.fg("borderAccent", String(start))}${this.theme.fg("muted", "-")}${this.theme.fg("borderAccent", String(end))}`;
+    }
+    hunkRegionText(hunk) {
+        const { end, label, start } = this.hunkRegion(hunk);
+        return end === start ? `${label} ${start}` : `${label} ${start}-${end}`;
+    }
+    hunkRegion(hunk) {
+        const start = hunk.jumpLine;
+        const end = hunk.newLines && hunk.newLines > 1
+            ? hunk.jumpLine + hunk.newLines - 1
+            : hunk.jumpLine;
+        return {
+            end,
+            label: end === start ? "line" : "lines",
+            start,
+        };
+    }
+    renderDiffLine(line, filePath) {
+        const parsed = parseDiffLine(line);
+        if (!parsed)
+            return this.theme.fg("toolDiffContext", line);
+        const prefixColor = parsed.marker === "+"
+            ? "toolDiffAdded"
+            : parsed.marker === "-"
+                ? "toolDiffRemoved"
+                : "toolDiffContext";
+        const prefix = this.theme.fg(prefixColor, parsed.prefix);
+        const highlightedContent = this.highlightDiffContent(parsed.content, filePath);
+        if (!highlightedContent)
+            return prefix;
+        return `${prefix}${highlightedContent}`;
+    }
+    highlightDiffContent(content, filePath) {
+        if (!content)
+            return "";
+        const language = getLanguageFromPath(filePath);
+        if (!language)
+            return this.theme.fg("toolOutput", content);
+        return (highlightCode(content, language)[0] ??
+            this.theme.fg("toolOutput", content));
+    }
+    selectCurrentSearchMatch() {
+        const match = this.findSearchMatch(1, true);
+        if (match)
+            this.selectSearchMatch(match);
+    }
+    moveSearch(delta) {
+        if (this.searchQuery.trim().length === 0) {
+            this.notice = "No active search. Press / for visible rows or ? for grep.";
+            return;
+        }
+        const match = this.findSearchMatch(delta, false);
+        if (!match) {
+            this.notice = `No ${this.searchMode === "grep" ? "grep " : ""}matches for "${this.searchQuery}".`;
+            return;
+        }
+        this.selectSearchMatch(match);
+    }
+    findSearchMatch(delta, includeCurrent) {
+        const matches = this.searchMatches();
+        if (matches.length === 0)
+            return undefined;
+        const selectedIndex = matches.findIndex((match) => match.id === this.selectedId);
+        const startIndex = selectedIndex !== -1
+            ? selectedIndex
+            : includeCurrent
+                ? 0
+                : delta > 0
+                    ? -1
+                    : 0;
+        const firstStep = includeCurrent ? 0 : 1;
+        for (let step = firstStep; step < matches.length + firstStep; step++) {
+            const index = positiveModulo(startIndex + delta * step, matches.length);
+            const match = matches[index];
+            if (match)
+                return match;
+        }
+        return undefined;
+    }
+    selectSearchMatch(match) {
+        if (this.searchMode === "grep") {
+            this.revealSearchMatch(match);
+            return;
+        }
+        this.selectRow(match.id);
+    }
+    revealSearchMatch(match) {
+        for (let parentId = this.parentById.get(match.turn.id); parentId;) {
+            this.foldedBranchIds.delete(parentId);
+            parentId = this.parentById.get(parentId);
+        }
+        if (match.kind !== "turn") {
+            this.detailTurnId = match.turn.id;
+        }
+        if ((match.kind === "hunk" || match.kind === "diff") && match.file) {
+            this.foldedDetailIds.delete(match.file.id);
+        }
+        this.invalidateRows();
+        this.selectRow(match.id);
+    }
+    searchStatus() {
+        const matches = this.searchMatches();
+        const selectedIndex = matches.findIndex((match) => match.id === this.selectedId);
+        return {
+            total: matches.length,
+            selectedIndex: selectedIndex === -1 ? undefined : selectedIndex,
+        };
+    }
+    searchMatches() {
+        const tokens = searchTokens(this.searchQuery);
+        if (tokens.length === 0)
+            return [];
+        return this.searchTargets().filter((match) => this.searchTextMatches(match.text, tokens));
+    }
+    searchTargets() {
+        if (this.searchMode === "grep")
+            return this.grepSearchTargets();
+        return this.getRows().map((row) => this.searchMatchForRow(row));
+    }
+    grepSearchTargets() {
+        const matches = [];
+        const visitedTurnIds = new Set();
+        const addTurn = (turnId) => {
+            if (visitedTurnIds.has(turnId))
+                return;
+            const turn = this.turnsById.get(turnId);
+            if (!turn)
+                return;
+            visitedTurnIds.add(turnId);
+            matches.push({
+                id: turn.id,
+                kind: "turn",
+                turn,
+                text: this.turnPlainText(turn),
+            });
+            for (const file of turn.files) {
+                matches.push({
+                    id: file.id,
+                    kind: "file",
+                    turn,
+                    file,
+                    text: this.filePlainText(file),
+                });
+                for (const hunk of file.hunks) {
+                    matches.push({
+                        id: hunk.id,
+                        kind: "hunk",
+                        turn,
+                        file,
+                        hunk,
+                        text: this.hunkPlainText(hunk),
+                    });
+                    for (let index = 0; index < hunk.bodyLines.length; index++) {
+                        matches.push({
+                            id: diffLineRowId(hunk, index),
+                            kind: "diff",
+                            turn,
+                            file,
+                            hunk,
+                            text: hunk.bodyLines[index] ?? "",
+                        });
+                    }
+                }
+            }
+            for (const childId of this.sortActiveFirst(this.childrenById.get(turn.id) ?? [])) {
+                addTurn(childId);
+            }
+        };
+        for (const rootId of this.sortActiveFirst(this.model.roots.map((root) => root.id))) {
+            addTurn(rootId);
+        }
+        for (const turn of this.model.turns)
+            addTurn(turn.id);
+        return matches;
+    }
+    searchMatchForRow(row) {
+        if (row.kind === "turn") {
+            return {
+                id: row.id,
+                kind: row.kind,
+                turn: row.turn,
+                text: this.turnPlainText(row.turn),
+            };
+        }
+        if (row.kind === "file") {
+            return {
+                id: row.id,
+                kind: row.kind,
+                turn: row.turn,
+                file: row.file,
+                text: this.filePlainText(row.file),
+            };
+        }
+        if (row.kind === "hunk") {
+            return {
+                id: row.id,
+                kind: row.kind,
+                turn: row.turn,
+                file: row.file,
+                hunk: row.hunk,
+                text: this.hunkPlainText(row.hunk),
+            };
+        }
+        return {
+            id: row.id,
+            kind: row.kind,
+            turn: row.turn,
+            file: row.file,
+            hunk: row.hunk,
+            text: row.text,
+        };
+    }
+    searchTextMatches(text, tokens) {
+        const normalizedText = text.toLowerCase();
+        return tokens.every((token) => normalizedText.includes(token));
+    }
+    turnPlainText(turn) {
+        return [
+            this.turnLabel(turn),
+            this.statPlainText(turn),
+            this.fileHunkPlainText(turn),
+        ].join(" ");
+    }
+    filePlainText(file) {
+        return [
+            file.path,
+            this.statPlainText(file),
+            this.hunkCountPlainText(file.hunks.length),
+        ].join(" ");
+    }
+    hunkPlainText(hunk) {
+        return [
+            this.hunkRegionText(hunk),
+            hunk.toolName,
+            this.statPlainText(hunk),
+            hunk.path,
+        ].join(" ");
+    }
+    moveSelection(delta) {
+        const rows = this.getRows();
+        if (rows.length === 0)
+            return;
+        const currentIndex = Math.max(0, rows.findIndex((row) => row.id === this.selectedId));
+        const currentRow = rows[currentIndex];
+        if (currentRow?.kind === "turn") {
+            this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
+            return;
+        }
+        if (currentRow?.kind === "file") {
+            this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
+            return;
+        }
+        if (currentRow?.kind === "hunk") {
+            this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
+            return;
+        }
+        const nextIndex = clamp(currentIndex + delta, 0, rows.length - 1);
+        this.selectRow(rows[nextIndex]?.id);
+    }
+    scopedRowForMovement(rows, currentRow, delta) {
+        const siblings = rows.filter((row) => this.isSameNavigationScope(currentRow, row));
+        if (siblings.length === 0)
+            return undefined;
+        const currentIndex = siblings.findIndex((row) => row.id === currentRow.id);
+        if (currentIndex === -1)
+            return undefined;
+        const nextIndex = clamp(currentIndex + delta, 0, siblings.length - 1);
+        return siblings[nextIndex];
+    }
+    isSameNavigationScope(currentRow, candidate) {
+        if (currentRow.kind === "turn")
+            return candidate.kind === "turn";
+        if (currentRow.kind === "file") {
+            return (candidate.kind === "file" && candidate.turn.id === currentRow.turn.id);
+        }
+        return (candidate.kind === "hunk" && candidate.file.id === currentRow.file.id);
+    }
+    moveToHunk(delta) {
+        const turn = this.getSelectedTurn();
+        if (!turn)
+            return;
+        const hunks = this.getAllHunks(turn);
+        if (hunks.length === 0)
+            return;
+        const selectedHunkId = this.findHunkForRow(this.getSelectedRow())?.id;
+        const currentIndex = hunks.findIndex((hunk) => hunk.id === selectedHunkId);
+        const nextIndex = currentIndex === -1
+            ? delta > 0
+                ? 0
+                : hunks.length - 1
+            : clamp(currentIndex + delta, 0, hunks.length - 1);
+        const hunk = hunks[nextIndex];
+        if (!hunk)
+            return;
+        this.detailTurnId = turn.id;
+        this.foldedDetailIds.delete(hunk.fileId);
+        this.selectedId = hunk.id;
+        this.invalidateRows();
+    }
+    moveToFile(delta) {
+        const turn = this.getSelectedTurn();
+        if (!turn || turn.files.length === 0)
+            return;
+        const selectedRow = this.getSelectedRow();
+        const selectedFileId = selectedRow && selectedRow.kind !== "turn"
+            ? selectedRow.file.id
+            : undefined;
+        const currentIndex = turn.files.findIndex((file) => file.id === selectedFileId);
+        const nextIndex = currentIndex === -1
+            ? delta > 0
+                ? 0
+                : turn.files.length - 1
+            : clamp(currentIndex + delta, 0, turn.files.length - 1);
+        const file = turn.files[nextIndex];
+        if (!file)
+            return;
+        this.detailTurnId = turn.id;
+        this.selectedId = file.id;
+        this.invalidateRows();
+    }
+    moveParentOrCollapse() {
+        const row = this.getSelectedRow();
+        if (!row)
+            return;
+        if (row.kind === "diff") {
+            this.selectRow(row.hunk.id);
+            return;
+        }
+        if (row.kind === "hunk") {
+            this.selectRow(row.file.id);
+            return;
+        }
+        if (row.kind === "file") {
+            if (this.isDetailExpanded(row)) {
+                this.foldedDetailIds.add(row.id);
+                this.invalidateRows();
+            }
+            else {
+                this.selectRow(row.turn.id);
+            }
+            return;
+        }
+        if (this.detailTurnId === row.id) {
+            this.detailTurnId = undefined;
+            this.invalidateRows();
+            return;
+        }
+        if (this.isBranchFoldable(row.id) && !this.foldedBranchIds.has(row.id)) {
+            this.foldedBranchIds.add(row.id);
+            this.invalidateRows();
+            return;
+        }
+        const parentId = this.parentById.get(row.id);
+        if (parentId)
+            this.selectRow(parentId);
+    }
+    moveChildOrExpand() {
+        const row = this.getSelectedRow();
+        if (!row)
+            return;
+        if (row.kind === "turn") {
+            const firstFile = row.turn.files[0];
+            if (firstFile) {
+                this.detailTurnId = row.turn.id;
+                this.selectedId = firstFile.id;
+                this.invalidateRows();
+                return;
+            }
+            if (this.foldedBranchIds.has(row.id)) {
+                this.foldedBranchIds.delete(row.id);
+                this.invalidateRows();
+                return;
+            }
+            const childId = this.firstVisibleChildId(row.id);
+            if (childId)
+                this.selectRow(childId);
+            return;
+        }
+        if (row.kind === "file") {
+            if (this.foldedDetailIds.has(row.id)) {
+                this.foldedDetailIds.delete(row.id);
+                this.invalidateRows();
+                return;
+            }
+            this.selectRow(row.file.hunks[0]?.id ?? row.id);
+            return;
+        }
+        if (row.kind === "hunk") {
+            this.selectRow(row.hunk.bodyLines.length > 0 ? diffLineRowId(row.hunk, 0) : row.id);
+        }
+    }
+    collapseSelectedScope() {
+        const row = this.getSelectedRow();
+        if (!row)
+            return;
+        if (row.kind === "turn") {
+            this.collapseTurnScope(row);
+        }
+        else if (row.kind === "file") {
+            this.collapseFileLevel(row.turn);
+        }
+        else if (row.kind === "hunk") {
+            return;
+        }
+        else {
+            this.selectRow(row.hunk.id);
+        }
+    }
+    expandSelectedScope() {
+        const row = this.getSelectedRow();
+        if (!row)
+            return;
+        if (row.kind === "turn") {
+            this.expandTurnScope(row);
+        }
+        else if (row.kind === "file") {
+            this.expandFileLevel(row.turn);
+        }
+        else if (row.kind === "hunk") {
+            this.selectRow(row.hunk.bodyLines.length > 0 ? diffLineRowId(row.hunk, 0) : row.id);
+        }
+        else {
+            this.selectRow(row.id);
+        }
+    }
+    collapseTurnScope(row) {
+        let changed = false;
+        if (this.detailTurnId === row.id) {
+            this.detailTurnId = undefined;
+            changed = true;
+        }
+        if (this.isBranchFoldable(row.id) && !this.foldedBranchIds.has(row.id)) {
+            this.foldedBranchIds.add(row.id);
+            changed = true;
+        }
+        if (changed)
+            this.invalidateRows();
+    }
+    expandTurnScope(row) {
+        let changed = false;
+        if (this.foldedBranchIds.delete(row.id))
+            changed = true;
+        if (row.turn.files.length > 0 && this.detailTurnId !== row.id) {
+            this.detailTurnId = row.id;
+            changed = true;
+        }
+        if (changed)
+            this.invalidateRows();
+    }
+    collapseFileLevel(turn) {
+        for (const file of turn.files) {
+            this.foldedDetailIds.add(file.id);
+        }
+        this.invalidateRows();
+    }
+    expandFileLevel(turn) {
+        this.detailTurnId = turn.id;
+        for (const file of turn.files) {
+            this.foldedDetailIds.delete(file.id);
+        }
+        this.invalidateRows();
+    }
+    toggleTurnFileJump() {
+        const row = this.getSelectedRow();
+        if (!row)
+            return;
+        if (row.kind === "turn") {
+            const firstFile = row.turn.files[0];
+            if (!firstFile)
+                return;
+            this.detailTurnId = row.turn.id;
+            this.selectedId = firstFile.id;
+            this.invalidateRows();
+            return;
+        }
+        this.selectRow(row.turn.id);
+    }
+    selectFirst() {
+        this.selectRow(this.getRows()[0]?.id);
+    }
+    selectLast() {
+        const rows = this.getRows();
+        this.selectRow(rows[rows.length - 1]?.id);
+    }
+    selectRow(id) {
+        if (!id)
+            return;
+        const row = this.getRows().find((candidate) => candidate.id === id);
+        this.selectedId = id;
+        if (!row)
+            return;
+        if (row.kind === "turn") {
+            if (this.detailTurnId && this.detailTurnId !== row.id) {
+                this.detailTurnId = undefined;
+                this.invalidateRows();
+            }
+            return;
+        }
+        const nextDetailTurnId = row.turn.id;
+        if (this.detailTurnId !== nextDetailTurnId) {
+            this.detailTurnId = nextDetailTurnId;
+            this.invalidateRows();
+        }
+    }
+    getSelectedRow() {
+        if (!this.selectedId)
+            return undefined;
+        return this.getRows().find((row) => row.id === this.selectedId);
+    }
+    getSelectedTurn() {
+        const selectedRow = this.getSelectedRow();
+        if (selectedRow)
+            return selectedRow.turn;
+        if (this.detailTurnId)
+            return this.turnsById.get(this.detailTurnId);
+        const preferredHeadId = this.preferredHeadTurnId();
+        return preferredHeadId ? this.turnsById.get(preferredHeadId) : undefined;
+    }
+    isBranchFoldable(turnId) {
+        const children = this.visibleChildrenById.get(turnId);
+        if (!children || children.length === 0)
+            return false;
+        const parentId = this.visibleParentById.get(turnId);
+        if (parentId === undefined)
+            return true;
+        const siblings = this.visibleChildrenById.get(parentId);
+        return siblings !== undefined && siblings.length > 1;
+    }
+    firstVisibleChildId(turnId) {
+        return this.visibleChildrenById.get(turnId)?.[0];
+    }
+    isDetailExpanded(row) {
+        return this.isDetailFoldable(row) && !this.foldedDetailIds.has(row.id);
+    }
+    isDetailFoldable(row) {
+        return row.kind === "file" && row.file.hunks.length > 0;
+    }
+    getAllHunks(turn) {
+        return turn.files.flatMap((file) => file.hunks);
+    }
+    findHunkForRow(row) {
+        if (!row)
+            return undefined;
+        if (row.kind === "turn")
+            return this.firstHunk(row.turn);
+        if (row.kind === "file")
+            return row.file.hunks[0];
+        return row.hunk;
+    }
+    firstHunk(turn) {
+        if (!turn)
+            return undefined;
+        for (const file of turn.files) {
+            const hunk = file.hunks[0];
+            if (hunk)
+                return hunk;
+        }
+        return undefined;
+    }
+    openSelectedHunk() {
+        this.openHunk(this.findHunkForRow(this.getSelectedRow()));
+    }
+    openHunk(hunk) {
+        if (!hunk) {
+            this.notice = "Select a changed file, hunk, or diff line to open it.";
+            return;
+        }
+        this.notice = openExternalEditor(this.tui, this.cwd, hunk.path, hunk.jumpLine);
+    }
+    summaryText() {
+        const scopeText = this.model.mode.kind === "session-turns"
+            ? `${this.model.turns.length} turn${this.model.turns.length === 1 ? "" : "s"} • `
+            : "";
+        return [
+            this.theme.fg("muted", `${scopeText}${this.model.totalFiles} file${this.model.totalFiles === 1 ? "" : "s"} • ${this.model.totalHunks} hunk${this.model.totalHunks === 1 ? "" : "s"} •`),
+            this.statText(this.model),
+        ].join(" ");
+    }
+    statusText() {
+        const rows = this.getRows();
+        const position = Math.max(0, rows.findIndex((row) => row.id === this.selectedId) + 1);
+        const selectedRow = this.getSelectedRow();
+        if (!selectedRow)
+            return "  (0/0)";
+        return `  (${position}/${rows.length}) ${this.describeRow(selectedRow)}`;
+    }
+    statText(stats) {
+        const parts = this.statParts(stats);
+        return `${this.theme.fg("toolDiffAdded", parts.additions)} ${this.theme.fg("toolDiffRemoved", parts.removals)}`;
+    }
+    statPlainText(stats) {
+        return this.statParts(stats).plain;
+    }
+    statParts(stats) {
+        const additions = `+${stats.additions}`;
+        const removals = `-${stats.removals}`;
+        return {
+            additions,
+            plain: `${additions} ${removals}`,
+            removals,
+        };
+    }
+    hunkCountText(hunkCount) {
+        const parts = this.countParts(hunkCount, "hunk");
+        return `${this.theme.fg("warning", parts.count)} ${this.theme.fg("muted", parts.label)}`;
+    }
+    hunkCountPlainText(hunkCount) {
+        return this.countParts(hunkCount, "hunk").plain;
+    }
+    fileCountText(fileCount) {
+        const parts = this.countParts(fileCount, "file");
+        return `${this.theme.fg("warning", parts.count)} ${this.theme.fg("muted", parts.label)}`;
+    }
+    fileCountPlainText(fileCount) {
+        return this.countParts(fileCount, "file").plain;
+    }
+    countParts(count, singular) {
+        const countText = String(count);
+        const label = `${singular}${count === 1 ? "" : "s"}`;
+        return {
+            count: countText,
+            label,
+            plain: `${countText} ${label}`,
+        };
+    }
+    fileHunkText(turn) {
+        return `${this.fileCountText(turn.files.length)} ${this.hunkCountText(this.hunkCountForTurn(turn))}`;
+    }
+    fileHunkPlainText(turn) {
+        return `${this.fileCountPlainText(turn.files.length)} ${this.hunkCountPlainText(this.hunkCountForTurn(turn))}`;
+    }
+    hunkCountForTurn(turn) {
+        return turn.files.reduce((total, file) => total + file.hunks.length, 0);
+    }
+    turnLabel(turn) {
+        return this.turnLabelParts(turn).plain;
+    }
+    turnLabelParts(turn) {
+        const prefix = this.turnLabelPrefix();
+        const prompt = turn.prompt || "(empty prompt)";
+        return {
+            plain: `${prefix}${prompt}`,
+            prefix,
+            prompt,
+        };
+    }
+    turnLabelPrefix() {
+        return this.model.mode.kind === "session-turns" ? "user: " : "";
+    }
+    describeRow(row) {
+        if (row.kind === "turn")
+            return this.turnLabel(row.turn);
+        if (row.kind === "file") {
+            return `${row.file.path} • ${this.hunkCountPlainText(row.file.hunks.length)}`;
+        }
+        if (row.kind === "hunk") {
+            return `${row.hunk.path}:${row.hunk.jumpLine} • ${keyText("app.editor.external")} opens here`;
+        }
+        return `${row.hunk.path}:${row.hunk.jumpLine} • diff line`;
+    }
+}
+function truncateSummaryBody(body) {
+    if (body.length <= MAX_SUMMARY_BODY_CHARS)
+        return body;
+    return `${body.slice(0, MAX_SUMMARY_BODY_CHARS)}\n\n[BetterDiff summary context truncated at ${MAX_SUMMARY_BODY_CHARS} characters]`;
+}
+function diffLineRowId(hunk, index) {
+    return `${hunk.id}:line:${index}`;
+}
+function parseDiffLine(line) {
+    const match = /^([+\- ])(\s*\d*)\s?(.*)$/u.exec(line);
+    if (!match?.[1])
+        return undefined;
+    const marker = match[1];
+    if (marker !== "+" && marker !== "-" && marker !== " ")
+        return undefined;
+    const lineNumber = match[2] ?? "";
+    const content = match[3] ?? "";
+    return {
+        marker,
+        prefix: `${marker}${lineNumber}${content ? " " : ""}`,
+        content,
+    };
+}
+function undoEditHunks(cwd, hunks) {
+    const editsByPath = new Map();
+    for (const hunk of hunks) {
+        if (hunk.toolName !== "edit")
+            continue;
+        const edit = reverseEditForHunk(hunk);
+        const edits = editsByPath.get(hunk.path) ?? [];
+        edits.push(edit);
+        editsByPath.set(hunk.path, edits);
+    }
+    if (editsByPath.size === 0) {
+        throw new Error("No reversible edit hunks in this scope.");
+    }
+    const nextContentByPath = new Map();
+    for (const [filePath, edits] of editsByPath) {
+        const absolutePath = resolve(cwd, filePath);
+        if (!existsSync(absolutePath)) {
+            throw new Error(`File no longer exists: ${filePath}`);
+        }
+        const rawContent = readFileSync(absolutePath, "utf8");
+        const lineEnding = detectLineEnding(rawContent);
+        let normalizedContent = normalizeLineEndings(rawContent);
+        for (const edit of [...edits].reverse()) {
+            normalizedContent = replaceLineSequenceOnce(normalizedContent, edit.currentLines, edit.restoredLines, edit.hunk);
+        }
+        nextContentByPath.set(absolutePath, restoreLineEndings(normalizedContent, lineEnding));
+    }
+    for (const [absolutePath, content] of nextContentByPath) {
+        writeFileSync(absolutePath, content, "utf8");
+    }
+    return {
+        hunks: [...editsByPath.values()].reduce((total, edits) => total + edits.length, 0),
+        files: editsByPath.size,
+    };
+}
+function reverseEditForHunk(hunk) {
+    const currentLines = [];
+    const restoredLines = [];
+    for (const line of hunk.bodyLines) {
+        const parsed = parseDiffLine(line);
+        if (!parsed) {
+            throw new Error(`Cannot parse diff line in ${hunk.path}:${hunk.jumpLine}`);
+        }
+        if (parsed.marker === "+") {
+            currentLines.push(parsed.content);
+        }
+        else if (parsed.marker === "-") {
+            restoredLines.push(parsed.content);
+        }
+        else {
+            currentLines.push(parsed.content);
+            restoredLines.push(parsed.content);
+        }
+    }
+    if (currentLines.length === 0) {
+        throw new Error(`Cannot undo ${hunk.path}:${hunk.jumpLine}; the current-side hunk is empty or lacks context.`);
+    }
+    return { hunk, currentLines, restoredLines };
+}
+function replaceLineSequenceOnce(content, searchLines, replacementLines, hunk) {
+    const lines = content.split("\n");
+    const matches = [];
+    for (let index = 0; index <= lines.length - searchLines.length; index++) {
+        if (lineSequenceMatches(lines, searchLines, index)) {
+            matches.push(index);
+        }
+    }
+    if (matches.length === 0) {
+        throw new Error(`Current text for ${hunk.path}:${hunk.jumpLine} was not found. The file may have changed after the edit.`);
+    }
+    if (matches.length > 1) {
+        throw new Error(`Current text for ${hunk.path}:${hunk.jumpLine} is ambiguous (${matches.length} matches).`);
+    }
+    const matchIndex = matches[0] ?? 0;
+    const nextLines = [
+        ...lines.slice(0, matchIndex),
+        ...replacementLines,
+        ...lines.slice(matchIndex + searchLines.length),
+    ];
+    if (nextLines.length === 1 && nextLines[0] === "")
+        return "";
+    return nextLines.join("\n");
+}
+function lineSequenceMatches(lines, searchLines, startIndex) {
+    for (let index = 0; index < searchLines.length; index++) {
+        if (lines[startIndex + index] !== searchLines[index])
+            return false;
+    }
+    return true;
+}
+function detectLineEnding(content) {
+    const crlfIndex = content.indexOf("\r\n");
+    const lfIndex = content.indexOf("\n");
+    if (lfIndex === -1)
+        return "\n";
+    if (crlfIndex === -1)
+        return "\n";
+    return crlfIndex <= lfIndex ? "\r\n" : "\n";
+}
+function normalizeLineEndings(content) {
+    return content.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+}
+function restoreLineEndings(content, lineEnding) {
+    return lineEnding === "\r\n" ? content.replace(/\n/gu, "\r\n") : content;
+}
+function openExternalEditor(tui, cwd, filePath, line) {
+    const absolutePath = resolve(cwd, filePath);
+    if (!existsSync(absolutePath)) {
+        return `File no longer exists: ${filePath}`;
+    }
+    const editorCommand = process.env.VISUAL || process.env.EDITOR || firstAvailableEditor() || "vi";
+    const [editor, ...editorArgs] = splitCommandLine(editorCommand);
+    if (!editor)
+        return "No external editor configured.";
+    const args = buildEditorArgs(editor, editorArgs, absolutePath, line);
+    try {
+        tui.stop();
+        const result = spawnSync(editor, args, {
+            cwd,
+            stdio: "inherit",
+            shell: process.platform === "win32",
+        });
+        if (result.error) {
+            return `Editor failed: ${result.error.message}`;
+        }
+        if (result.status && result.status !== 0) {
+            return `Editor exited with status ${result.status}`;
+        }
+        return `Returned from ${editor} at ${filePath}:${line}`;
+    }
+    finally {
+        tui.start();
+        tui.requestRender(true);
+    }
+}
+function firstAvailableEditor() {
+    for (const candidate of ["nvim", "vim", "vi"]) {
+        if (commandExists(candidate))
+            return candidate;
+    }
+    return undefined;
+}
+function commandExists(command) {
+    const result = process.platform === "win32"
+        ? spawnSync("where", [command], { stdio: "ignore" })
+        : spawnSync("sh", ["-lc", `command -v ${shellQuote(command)}`], {
+            stdio: "ignore",
+        });
+    return result.status === 0;
+}
+function shellQuote(value) {
+    return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+function splitCommandLine(commandLine) {
+    const parts = [];
+    let current = "";
+    let quote;
+    let escaped = false;
+    for (const char of commandLine.trim()) {
+        if (escaped) {
+            current += char;
+            escaped = false;
+            continue;
+        }
+        if (char === "\\" && quote !== "'") {
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            if (char === quote) {
+                quote = undefined;
+            }
+            else {
+                current += char;
+            }
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            quote = char;
+            continue;
+        }
+        if (/\s/u.test(char)) {
+            if (current) {
+                parts.push(current);
+                current = "";
+            }
+            continue;
+        }
+        current += char;
+    }
+    if (escaped)
+        current += "\\";
+    if (current)
+        parts.push(current);
+    return parts;
+}
+function buildEditorArgs(editor, editorArgs, filePath, line) {
+    const editorName = (editor.split(/[\\/]/u).pop() ?? editor).toLowerCase();
+    if (editorName === "code" ||
+        editorName === "code-insiders" ||
+        editorName === "cursor") {
+        return [...editorArgs, "--goto", `${filePath}:${line}:1`];
+    }
+    if (editorName === "hx" || editorName === "helix") {
+        return [...editorArgs, `${filePath}:${line}:1`];
+    }
+    return [...editorArgs, `+${line}`, filePath];
+}
+function requestLabel(request) {
+    if (request.kind === "git-branch-selected") {
+        return `Current branch vs ${request.baseRef}`;
+    }
+    return (DIFF_MODE_CHOICES.find((choice) => choice.kind === request.kind)?.label ??
+        request.kind);
+}
+function searchTokens(query) {
+    return query.toLowerCase().split(/\s+/u).filter(Boolean);
+}
+function isPrintableInput(data) {
+    if (data.length === 0)
+        return false;
+    return [...data].every((char) => {
+        const code = char.codePointAt(0) ?? 0;
+        return code >= 32 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
+    });
+}
+function positiveModulo(value, modulus) {
+    return ((value % modulus) + modulus) % modulus;
+}
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
