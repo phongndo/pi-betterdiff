@@ -12,21 +12,7 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
   - **Smallest acceptable fix:** Keep global grep explicitly labeled as global/all-review, and implement scoped grep as a separate mode or derive its target set from the selected row. Do not pretend the current global traversal satisfies scoped grep.
   - **Required test:** Tests for invoking grep from selected turn, file, hunk, and diff-line rows proving matches stay inside the expected scope; separate tests for intentional global/all-review grep.
 
-- [ ] **Cover search edge cases instead of only the happy path.**
-  - **Location:** `test/diff-review-ui.test.ts`
-  - **Context:** Existing tests cover basic tree search, visible label search, search cancel, hidden-row exclusion, hidden-content grep reveal, diff-body grep reveal, and grep across unrendered turns. They still do not cover reopening, stale queries, backspace-to-empty, mode switching, or folded branch ancestors.
-  - **Why this is an issue:** The search state machine is now another modal input path. Without edge-case tests, it will regress the first time someone touches action menus, mode switching, query editing, or branch folding.
-  - **How to verify:** Manually exercise backspace, reopening `/` or `?`, switching modes after a search, and searching folded branch ancestors. Current tests do not pin those behaviors.
-  - **Smallest acceptable fix:** Add behavior-level input tests for the missing state transitions rather than snapshotting implementation trivia.
-  - **Required test:** Cover at least: backspace deleting the last character and hiding the search line, reopening search after a previous query, `n` / `N` grep cycling through multiple hidden matches, search/grep after mode switching or refresh, and search through folded branch ancestors.
-
 ## Suspicious open cleanup
-
-- [ ] **Decide whether reopening search edits the previous query or starts fresh.**
-  - **Location:** `src/render/diff-review-ui.ts:657-662`
-  - **Context:** `openSearch()` preserves `searchQuery` when `/` or `?` is pressed again. With no cursor movement and no clear command, “edit” currently means append more characters to the old query.
-  - **Why this smells:** This is not a real input editor; it is a string append box with backspace. That may be acceptable for a prototype, but the behavior must be intentional and tested.
-  - **Smallest acceptable fix:** Either clear the query when opening a different search mode, or deliberately preserve it and provide tested editing/clearing behavior.
 
 - [ ] **Watch search target rebuilding on large diffs.**
   - **Location:** `src/render/diff-review-ui.ts:1607-1693`
@@ -62,6 +48,22 @@ Track bug fixes, review findings, suspicious implementation patterns, and missin
   - **Smallest acceptable fix:** Add a `diffLineRowId(hunk, index)` helper and use it everywhere row ids or search match ids are built.
   - **Required test:** Grep a diff-body match and assert the selected rendered diff line is revealed.
   - **Fixed in working tree:** `diffLineRowId()` now owns diff-line ids for row construction, search targets, and hunk expansion. Tests cover grep reveal for a unique diff body line.
+
+- [x] **Cover search edge cases instead of only the happy path.**
+  - **Location:** `test/diff-review-ui.test.ts`
+  - **Context:** Search is a modal mini state machine. It needed coverage for clearing, reopening, query editing, mode switching, cycling hidden matches, and folded branch ancestors.
+  - **Why this was an issue:** Without edge-case tests, search could regress when touching action menus, mode switching, query editing, or branch folding.
+  - **How to verify:** Run `npm test -- --reporter verbose test/diff-review-ui.test.ts` and inspect the search/grep behavior tests.
+  - **Smallest acceptable fix:** Add behavior-level input tests for the missing state transitions rather than snapshotting implementation trivia.
+  - **Required test:** Cover at least: backspace deleting the last character and hiding the search line, reopening search after a previous query, `n` / `N` grep cycling through multiple hidden matches, search/grep after mode switching or refresh, and search through folded branch ancestors.
+  - **Fixed in working tree:** Tests now cover backspace-to-empty, fresh query on reopening search, search clearing after diff mode switch, grep cycling across collapsed file details, and grep reveal through folded branch ancestors.
+
+- [x] **Decide whether reopening search edits the previous query or starts fresh.**
+  - **Location:** `src/render/diff-review-ui.ts`, `test/diff-review-ui.test.ts`
+  - **Context:** `openSearch()` preserved `searchQuery` when `/` or `?` was pressed again. With no cursor movement and no clear command, “edit” meant appending more characters to the old query.
+  - **Why this smelled:** This was not a real input editor; it was a string append box with backspace.
+  - **Smallest acceptable fix:** Either clear the query when opening a different search mode, or deliberately preserve it and provide tested editing/clearing behavior.
+  - **Fixed in working tree:** Reopening search now starts a fresh query by clearing `searchQuery` in `openSearch()`. Tests pin that behavior.
 
 ## Resolved review findings from `9164cdc` (`style: improve diff metadata coloring`)
 

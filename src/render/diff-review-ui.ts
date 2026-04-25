@@ -665,6 +665,7 @@ export class DiffReviewComponent implements Component {
   private openSearch(mode: SearchMode): void {
     this.searchMode = mode;
     this.searchEditing = true;
+    this.searchQuery = "";
     this.notice = undefined;
     this.selectCurrentSearchMatch();
   }

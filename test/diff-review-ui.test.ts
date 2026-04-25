@@ -872,6 +872,71 @@ describe("DiffReviewComponent", () => {
     expect(rendered).not.toContain("Search:");
   });
 
+  it("hides search after backspacing to an empty query and confirming", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("/");
+    for (const char of "zz") component.handleInput(char);
+    component.handleInput("\x7f");
+    component.handleInput("\x7f");
+    let rendered = renderComponent(component);
+
+    expect(rendered).toContain("Search: (type query)▌");
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>",
+    );
+
+    component.handleInput("\r");
+    rendered = renderComponent(component);
+    expect(rendered).not.toContain("Search:");
+  });
+
+  it("starts a fresh query when reopening search", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("/");
+    for (const char of "src/b.ts") component.handleInput(char);
+    component.handleInput("\r");
+    expect(renderComponent(component)).toContain("Search: src/b.ts  1/2");
+
+    component.handleInput("/");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("Search: (type query)▌");
+    expect(rendered).not.toContain("Search: src/b.ts");
+
+    for (const char of "src/a.ts") component.handleInput(char);
+    rendered = renderComponent(component);
+    expect(rendered).toContain("Search: src/a.ts▌  1/3");
+    expect(rendered).toContain(
+      "<selectedBg>› ├─ ⊟ src/a.ts +3 -1 2 hunks</selectedBg>",
+    );
+  });
+
+  it("clears search when switching diff modes", async () => {
+    const component = createComponent(
+      buildPluralModel(),
+      theme,
+      () => {},
+      keybindings,
+      process.cwd(),
+      () => Promise.resolve(buildGitChangesModel()),
+    );
+
+    component.handleInput("/");
+    for (const char of "src/a.ts") component.handleInput(char);
+    component.handleInput("\r");
+    expect(renderComponent(component)).toContain("Search: src/a.ts  1/3");
+
+    component.handleInput("m");
+    component.handleInput("j");
+    component.handleInput("\r");
+    await flushPromises();
+
+    const rendered = renderComponent(component);
+    expect(rendered).toContain("Better Diff — Git changes");
+    expect(rendered).not.toContain("Search:");
+  });
+
   it("does not search rows hidden by collapsed file details", () => {
     const component = createComponent(buildPluralModel());
 
@@ -934,6 +999,77 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toMatch(
       /<selectedBg>›\s+\+5 uniqueDiffNeedle<\/selectedBg>/u,
     );
+  });
+
+  it("cycles grep matches across collapsed file details", () => {
+    const component = createComponent(
+      buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 7,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+                bodyLines: ["+7 sharedNeedle first"],
+              },
+            ],
+          },
+          {
+            path: "src/b.ts",
+            hunks: [
+              {
+                jumpLine: 30,
+                newLines: 1,
+                additions: 1,
+                removals: 0,
+                toolName: "edit",
+                bodyLines: ["+30 sharedNeedle second"],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    component.handleInput("l");
+    component.handleInput("c");
+    component.handleInput("?");
+    for (const char of "sharedNeedle") component.handleInput(char);
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("Grep: sharedNeedle▌  1/2");
+    expect(rendered).toContain("+7 sharedNeedle first</selectedBg>");
+
+    component.handleInput("\r");
+    component.handleInput("n");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("Grep: sharedNeedle  2/2");
+    expect(rendered).toContain("+30 sharedNeedle second</selectedBg>");
+
+    component.handleInput("N");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("Grep: sharedNeedle  1/2");
+    expect(rendered).toContain("+7 sharedNeedle first</selectedBg>");
+  });
+
+  it("greps through folded branch ancestors and reveals the matched diff line", () => {
+    const component = createComponent(buildBranchModel());
+
+    component.handleInput("c");
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("⊞ • user: root change");
+    expect(rendered).not.toContain("child change");
+
+    component.handleInput("?");
+    for (const char of "foldedNeedle") component.handleInput(char);
+    rendered = renderComponent(component);
+
+    expect(rendered).toContain("Grep: foldedNeedle▌  1/1");
+    expect(rendered).toContain("user: child change");
+    expect(rendered).toContain("+2 foldedNeedle</selectedBg>");
   });
 
   it("greps across turns whose details are not currently rendered", () => {
@@ -1245,6 +1381,50 @@ function buildTwoTurnModel(): ReviewModel {
   return buildReviewModelFromTurns(turns, ["turn-1"]);
 }
 
+function buildBranchModel(): ReviewModel {
+  const root = buildReviewTurn({
+    turnId: "turn-root",
+    ordinal: 1,
+    prompt: "root change",
+    files: [
+      {
+        path: "src/root.ts",
+        hunks: [
+          {
+            jumpLine: 1,
+            newLines: 1,
+            additions: 1,
+            removals: 0,
+            toolName: "edit",
+          },
+        ],
+      },
+    ],
+  });
+  const child = buildReviewTurn({
+    turnId: "turn-child",
+    ordinal: 2,
+    prompt: "child change",
+    files: [
+      {
+        path: "src/child.ts",
+        hunks: [
+          {
+            jumpLine: 2,
+            newLines: 1,
+            additions: 1,
+            removals: 0,
+            toolName: "edit",
+            bodyLines: ["+2 foldedNeedle"],
+          },
+        ],
+      },
+    ],
+  });
+  root.children = [child];
+  return buildReviewModelFromRoots([root], [root, child], [root.id]);
+}
+
 function buildReviewModel({
   prompt = "change file",
   files,
@@ -1320,10 +1500,18 @@ function buildReviewModelFromTurns(
   turns: ReviewTurn[],
   activeTurnIds: string[],
 ): ReviewModel {
+  return buildReviewModelFromRoots(turns, turns, activeTurnIds);
+}
+
+function buildReviewModelFromRoots(
+  roots: ReviewTurn[],
+  turns: ReviewTurn[],
+  activeTurnIds: string[],
+): ReviewModel {
   return {
     mode: SESSION_TURNS_REVIEW_MODE,
     turns,
-    roots: turns,
+    roots,
     activeTurnIds,
     totalFiles: turns.reduce((total, turn) => total + turn.files.length, 0),
     totalHunks: turns.reduce(
