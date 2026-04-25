@@ -1,5 +1,6 @@
 node_modules
 coverage
 tmp
+.tmp-screens
 *.tgz
 .DS_Store
