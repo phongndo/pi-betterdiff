@@ -145,7 +145,7 @@ const DIFF_MODE_CHOICES: readonly DiffModeChoice[] = [
   {
     kind: "git-changes",
     label: "Git changes",
-    description: "staged above unstaged",
+    description: "staged above unstaged/untracked",
     request: { kind: "git-changes" },
   },
   {

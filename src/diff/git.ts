@@ -12,10 +12,11 @@ export type GitDiffSectionKind = "staged" | "unstaged";
 export const GIT_CHANGES_REVIEW_MODE: ReviewModeInfo = {
   kind: "git-changes",
   label: "Git changes",
-  description: "staged (HEAD → index) above unstaged (index → working tree)",
-  emptyTitle: "No staged or unstaged changes found.",
+  description:
+    "staged (HEAD → index) above unstaged/untracked (index → working tree)",
+  emptyTitle: "No staged, unstaged, or untracked changes found.",
   emptyHint:
-    "Stage changes with git add or edit tracked files, then reopen /diff.",
+    "Stage changes with git add, edit tracked files, or create untracked files, then reopen /diff.",
 };
 
 interface HunkRange {
@@ -52,6 +53,22 @@ export function gitDiffArgs(section: GitDiffSectionKind): string[] {
   return section === "staged"
     ? [...GIT_DIFF_BASE_ARGS, "--cached"]
     : [...GIT_DIFF_BASE_ARGS];
+}
+
+export function gitUntrackedFilesArgs(): string[] {
+  return ["ls-files", "--others", "--exclude-standard", "-z"];
+}
+
+export function gitUntrackedDiffArgs(path: string): string[] {
+  return [...GIT_DIFF_BASE_ARGS, "--no-index", "--", "/dev/null", path];
+}
+
+export function parseGitNulPathList(stdout: string): string[] {
+  return stdout.split("\0").filter((path) => path.length > 0);
+}
+
+export function joinGitPatches(patches: readonly string[]): string {
+  return patches.filter((patch) => patch.length > 0).join("\n");
 }
 
 export function gitBranchDiffArgs(
@@ -291,7 +308,7 @@ function gitSectionTurnId(section: GitDiffSectionKind): string {
 function gitSectionPrompt(section: GitDiffSectionKind): string {
   return section === "staged"
     ? "Staged changes — HEAD → index"
-    : "Unstaged changes — index → working tree";
+    : "Unstaged/untracked changes — index → working tree";
 }
 
 function emptyGitChangesReviewModel(): ReviewModel {

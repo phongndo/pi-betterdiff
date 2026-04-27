@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   gitBranchDiffArgs,
   gitDiffArgs,
+  gitUntrackedDiffArgs,
+  gitUntrackedFilesArgs,
+  joinGitPatches,
   parseGitBranchReviewModel,
   parseGitChangesReviewModel,
+  parseGitNulPathList,
 } from "../src/diff/git.js";
 
 const modifiedPatch = [
@@ -21,7 +25,7 @@ const modifiedPatch = [
 ].join("\n");
 
 describe("parseGitChangesReviewModel", () => {
-  it("renders staged changes above unstaged changes in one model", () => {
+  it("renders staged changes above unstaged/untracked changes in one model", () => {
     const unstagedPatch = [
       "diff --git a/src/b.ts b/src/b.ts",
       "index 3333333..4444444 100644",
@@ -41,7 +45,7 @@ describe("parseGitChangesReviewModel", () => {
     expect(model.removals).toBe(2);
     expect(model.turns.map((turn) => turn.prompt)).toEqual([
       "Staged changes — HEAD → index",
-      "Unstaged changes — index → working tree",
+      "Unstaged/untracked changes — index → working tree",
     ]);
     expect(model.roots.map((turn) => turn.id)).toEqual([
       "git:changes:staged",
@@ -78,7 +82,7 @@ describe("parseGitChangesReviewModel", () => {
     ]);
   });
 
-  it("keeps an empty staged section above non-empty unstaged changes", () => {
+  it("keeps an empty staged section above non-empty unstaged/untracked changes", () => {
     const patch = [
       "diff --git a/src/new.ts b/src/new.ts",
       "new file mode 100644",
@@ -104,7 +108,7 @@ describe("parseGitChangesReviewModel", () => {
     expect(model.turns[0]?.prompt).toBe("Staged changes — HEAD → index");
     expect(model.turns[0]?.files).toEqual([]);
     expect(model.turns[1]?.prompt).toBe(
-      "Unstaged changes — index → working tree",
+      "Unstaged/untracked changes — index → working tree",
     );
     expect(model.turns[1]?.files.map((file) => file.path)).toEqual([
       "src/new.ts",
@@ -153,10 +157,34 @@ describe("parseGitChangesReviewModel", () => {
     );
   });
 
-  it("returns mode-specific empty models when staged and unstaged are empty", () => {
+  it("places untracked file patches in the unstaged/untracked section", () => {
+    const untrackedPatch = [
+      "diff --git a/plan.md b/plan.md",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/plan.md",
+      "@@ -0,0 +1 @@",
+      "+does unstaged and staged git work?",
+    ].join("\n");
+
+    const model = parseGitChangesReviewModel("", untrackedPatch);
+
+    expect(model.turns[0]?.files).toEqual([]);
+    expect(model.turns[1]?.prompt).toBe(
+      "Unstaged/untracked changes — index → working tree",
+    );
+    expect(model.turns[1]?.files[0]?.path).toBe("plan.md");
+    expect(model.turns[1]?.files[0]?.hunks[0]?.additions).toBe(1);
+    expect(model.totalFiles).toBe(1);
+  });
+
+  it("returns mode-specific empty models when staged, unstaged, and untracked are empty", () => {
     const model = parseGitChangesReviewModel("", "");
 
-    expect(model.mode.emptyTitle).toBe("No staged or unstaged changes found.");
+    expect(model.mode.emptyTitle).toBe(
+      "No staged, unstaged, or untracked changes found.",
+    );
     expect(model.turns).toEqual([]);
     expect(model.totalFiles).toBe(0);
     expect(model.totalHunks).toBe(0);
@@ -190,6 +218,39 @@ describe("gitDiffArgs", () => {
   it("uses cached diff args only for the staged section", () => {
     expect(gitDiffArgs("staged")).toContain("--cached");
     expect(gitDiffArgs("unstaged")).not.toContain("--cached");
+  });
+
+  it("builds args for listing and diffing untracked files", () => {
+    expect(gitUntrackedFilesArgs()).toEqual([
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ]);
+    expect(gitUntrackedDiffArgs("docs/hello world.md")).toEqual([
+      "diff",
+      "--no-color",
+      "--no-ext-diff",
+      "--patch",
+      "--find-renames",
+      "--no-index",
+      "--",
+      "/dev/null",
+      "docs/hello world.md",
+    ]);
+  });
+
+  it("parses nul-delimited git path lists without trimming path text", () => {
+    expect(parseGitNulPathList("plan.md\0 docs/space.md \0")).toEqual([
+      "plan.md",
+      " docs/space.md ",
+    ]);
+  });
+
+  it("joins non-empty git patches with a diff boundary newline", () => {
+    expect(
+      joinGitPatches(["", "diff --git a/a b/a", "diff --git a/b b/b"]),
+    ).toBe("diff --git a/a b/a\ndiff --git a/b b/b");
   });
 
   it("builds merge-base branch diff args", () => {

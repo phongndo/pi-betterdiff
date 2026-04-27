@@ -7,7 +7,7 @@ The extension now includes an initial `/diff` UI prototype for reviewing agent-p
 ![BetterDiff session tree reviewing a pi session branch](docs/screenshots/betterdiff-session-tree.svg)
 
 <p>
-  <img src="docs/screenshots/betterdiff-git-changes.svg" alt="BetterDiff Git changes mode with staged changes above unstaged changes" width="49%">
+  <img src="docs/screenshots/betterdiff-git-changes.svg" alt="BetterDiff Git changes mode with staged changes above unstaged and untracked changes" width="49%">
   <img src="docs/screenshots/betterdiff-scoped-actions.svg" alt="BetterDiff scoped actions menu for summaries and undo actions" width="49%">
 </p>
 
@@ -48,7 +48,7 @@ Then use `/diff` inside pi to open the BetterDiff review UI.
 - GitHub Actions for CI and release packaging
 - `/diff` command that opens a tree-inspired diff navigator
 - default session-turn mode for reviewing agent-produced `edit`/`write` mutations by user turn
-- combined Git changes mode backed by `git diff --cached` and `git diff`, with staged changes shown above unstaged changes
+- combined Git changes mode backed by `git diff --cached`, `git diff`, and untracked-file patches, with staged changes shown above unstaged/untracked changes
 - branch comparison modes for current branch vs main/master and current branch vs a selected branch/ref
 - in-UI mode switching with `m`, plus `/diff git`, `/diff changes`, `/diff branch`, and `/diff branch <base-ref>` shortcuts
 - branch-aware tree of diff-producing user turns that opens on the active session head, stays flat for linear history, indents only at forks, and marks the active branch

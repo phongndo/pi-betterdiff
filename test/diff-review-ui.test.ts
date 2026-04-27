@@ -208,11 +208,11 @@ describe("DiffReviewComponent", () => {
     );
     expect(rendered).toContain("src/staged.ts +1 -0 1 hunk");
     expect(rendered).toContain(
-      "Unstaged changes — index → working tree +2 -1 1 file 1 hunk",
+      "Unstaged/untracked changes — index → working tree +2 -1 1 file 1 hunk",
     );
     expect(rendered).toContain("src/unstaged.ts +2 -1 1 hunk");
     expect(rendered.indexOf("Staged changes")).toBeLessThan(
-      rendered.indexOf("Unstaged changes"),
+      rendered.indexOf("Unstaged/untracked changes"),
     );
     expect(rendered).not.toContain("user: Staged changes");
   });
@@ -1203,7 +1203,7 @@ function buildGitChangesModel(): ReviewModel {
   const unstagedTurn = buildReviewTurn({
     turnId: "git-changes-unstaged-turn",
     ordinal: 2,
-    prompt: "Unstaged changes — index → working tree",
+    prompt: "Unstaged/untracked changes — index → working tree",
     files: [
       {
         path: "src/unstaged.ts",

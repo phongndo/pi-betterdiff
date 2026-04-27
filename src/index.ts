@@ -6,8 +6,12 @@ import type {
 import {
   gitBranchDiffArgs,
   gitDiffArgs,
+  gitUntrackedDiffArgs,
+  gitUntrackedFilesArgs,
+  joinGitPatches,
   parseGitBranchReviewModel,
   parseGitChangesReviewModel,
+  parseGitNulPathList,
 } from "./diff/git.js";
 import { buildReviewModelFromTree } from "./diff/model.js";
 import type { ReviewModeKind, ReviewModel } from "./diff/model.js";
@@ -98,16 +102,21 @@ export default function betterDiffExtension(pi: ExtensionAPI): void {
   async function loadGitChangesReviewModel(
     ctx: ExtensionCommandContext,
   ): Promise<ReviewModel> {
-    const [stagedResult, unstagedResult] = await Promise.all([
-      pi.exec("git", gitDiffArgs("staged"), {
-        cwd: ctx.cwd,
-        timeout: 30_000,
-      }),
-      pi.exec("git", gitDiffArgs("unstaged"), {
-        cwd: ctx.cwd,
-        timeout: 30_000,
-      }),
-    ]);
+    const [stagedResult, unstagedResult, untrackedFilesResult] =
+      await Promise.all([
+        pi.exec("git", gitDiffArgs("staged"), {
+          cwd: ctx.cwd,
+          timeout: 30_000,
+        }),
+        pi.exec("git", gitDiffArgs("unstaged"), {
+          cwd: ctx.cwd,
+          timeout: 30_000,
+        }),
+        pi.exec("git", gitUntrackedFilesArgs(), {
+          cwd: ctx.cwd,
+          timeout: 30_000,
+        }),
+      ]);
 
     if (stagedResult.code !== 0) {
       throw new Error(
@@ -121,11 +130,48 @@ export default function betterDiffExtension(pi: ExtensionAPI): void {
           `git unstaged diff exited with status ${unstagedResult.code}`,
       );
     }
+    if (untrackedFilesResult.code !== 0) {
+      throw new Error(
+        untrackedFilesResult.stderr.trim() ||
+          `git untracked file listing exited with status ${untrackedFilesResult.code}`,
+      );
+    }
+
+    const untrackedPatch = await loadUntrackedGitPatch(
+      ctx,
+      parseGitNulPathList(untrackedFilesResult.stdout),
+    );
 
     return parseGitChangesReviewModel(
       stagedResult.stdout,
-      unstagedResult.stdout,
+      joinGitPatches([unstagedResult.stdout, untrackedPatch]),
     );
+  }
+
+  async function loadUntrackedGitPatch(
+    ctx: ExtensionCommandContext,
+    paths: readonly string[],
+  ): Promise<string> {
+    const patches: string[] = [];
+
+    for (const path of paths) {
+      const result = await pi.exec("git", gitUntrackedDiffArgs(path), {
+        cwd: ctx.cwd,
+        timeout: 30_000,
+      });
+      if (
+        result.code !== 0 &&
+        !(result.code === 1 && result.stdout.length > 0)
+      ) {
+        throw new Error(
+          result.stderr.trim() ||
+            `git untracked diff for ${path} exited with status ${result.code}`,
+        );
+      }
+      if (result.stdout.length > 0) patches.push(result.stdout);
+    }
+
+    return joinGitPatches(patches);
   }
 
   async function loadGitBranchReviewModel(
