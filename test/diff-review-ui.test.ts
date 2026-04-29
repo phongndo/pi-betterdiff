@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KeybindingsManager, Theme } from "@mariozechner/pi-coding-agent";
@@ -41,6 +47,11 @@ const tui = {
 
 const keybindings = {
   matches: () => false,
+} as unknown as KeybindingsManager;
+
+const externalEditorKeybindings = {
+  matches: (data: string, id: string) =>
+    data === "x" && id === "app.editor.external",
 } as unknown as KeybindingsManager;
 
 describe("DiffReviewComponent", () => {
@@ -488,6 +499,152 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain(
       "Confirm undo this hunk — Reverse 1 edit hunk / 1 file in the working tree",
     );
+  });
+
+  it("opens file headers at the beginning of the selected file", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "betterdiff-open-file-"));
+    const originalEditor = process.env.EDITOR;
+    const originalVisual = process.env.VISUAL;
+    try {
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src/a.ts"), "one\ntwo\n", "utf8");
+      process.env.VISUAL = "";
+      process.env.EDITOR = "true";
+      const component = createComponent(
+        buildReviewModel({
+          files: [
+            {
+              path: "src/a.ts",
+              hunks: [
+                {
+                  jumpLine: 7,
+                  newLines: 1,
+                  additions: 1,
+                  removals: 0,
+                  toolName: "edit",
+                },
+              ],
+            },
+          ],
+        }),
+        theme,
+        () => {},
+        externalEditorKeybindings,
+        cwd,
+      );
+
+      component.handleInput("\t");
+      component.handleInput("x");
+
+      expect(renderComponent(component)).toContain(
+        "Returned from true at src/a.ts:1",
+      );
+    } finally {
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
+      if (originalVisual === undefined) delete process.env.VISUAL;
+      else process.env.VISUAL = originalVisual;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("opens hunk headers at the hunk start", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "betterdiff-open-hunk-"));
+    const originalEditor = process.env.EDITOR;
+    const originalVisual = process.env.VISUAL;
+    try {
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src/a.ts"), "one\ntwo\n", "utf8");
+      process.env.VISUAL = "";
+      process.env.EDITOR = "true";
+      const component = createComponent(
+        buildReviewModel({
+          files: [
+            {
+              path: "src/a.ts",
+              hunks: [
+                {
+                  jumpLine: 7,
+                  newLines: 1,
+                  additions: 1,
+                  removals: 0,
+                  toolName: "edit",
+                },
+              ],
+            },
+          ],
+        }),
+        theme,
+        () => {},
+        externalEditorKeybindings,
+        cwd,
+      );
+
+      component.handleInput("l");
+      component.handleInput("x");
+
+      expect(renderComponent(component)).toContain(
+        "Returned from true at src/a.ts:7",
+      );
+    } finally {
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
+      if (originalVisual === undefined) delete process.env.VISUAL;
+      else process.env.VISUAL = originalVisual;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("opens diff lines at the selected current-side line", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "betterdiff-open-line-"));
+    const originalEditor = process.env.EDITOR;
+    const originalVisual = process.env.VISUAL;
+    try {
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src/a.ts"), "one\ntwo\nthree\n", "utf8");
+      process.env.VISUAL = "";
+      process.env.EDITOR = "true";
+      const component = createComponent(
+        buildReviewModel({
+          files: [
+            {
+              path: "src/a.ts",
+              hunks: [
+                {
+                  jumpLine: 10,
+                  newLines: 3,
+                  additions: 2,
+                  removals: 1,
+                  toolName: "edit",
+                  bodyLines: [" 9 context", "-10 old", "+10 new", "+11 extra"],
+                },
+              ],
+            },
+          ],
+        }),
+        theme,
+        () => {},
+        externalEditorKeybindings,
+        cwd,
+      );
+
+      component.handleInput("l");
+      component.handleInput("l");
+      component.handleInput("j");
+      component.handleInput("j");
+      component.handleInput("j");
+      component.handleInput("x");
+
+      expect(renderComponent(component)).toContain(
+        "Returned from true at src/a.ts:11",
+      );
+    } finally {
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
+      if (originalVisual === undefined) delete process.env.VISUAL;
+      else process.env.VISUAL = originalVisual;
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("undoes selected edit hunks after confirmation", () => {

@@ -2113,20 +2113,37 @@ export class DiffReviewComponent implements Component {
   }
 
   private openSelectedHunk(): void {
-    this.openHunk(this.findHunkForRow(this.getSelectedRow()));
-  }
-
-  private openHunk(hunk: ReviewHunk | undefined): void {
-    if (!hunk) {
+    const row = this.getSelectedRow();
+    const target = this.editorTargetForRow(row);
+    if (!target) {
       this.notice = "Select a changed file, hunk, or diff line to open it.";
       return;
     }
     this.notice = openExternalEditor(
       this.tui,
       this.cwd,
-      hunk.path,
-      hunk.jumpLine,
+      target.path,
+      target.line,
     );
+  }
+
+  private editorTargetForRow(
+    row: RenderRow | undefined,
+  ): { path: string; line: number } | undefined {
+    if (!row) return undefined;
+    if (row.kind === "file") return { path: row.file.path, line: 1 };
+
+    const hunk = this.findHunkForRow(row);
+    if (!hunk) return undefined;
+
+    if (row.kind === "diff") {
+      return {
+        path: hunk.path,
+        line: diffLineTargetLine(hunk, row.id),
+      };
+    }
+
+    return { path: hunk.path, line: hunk.jumpLine };
   }
 
   private summaryText(): string {
@@ -2318,6 +2335,25 @@ function parseDiffLine(line: string): ParsedDiffLine | undefined {
     prefix: `${marker}${lineNumber}${content ? " " : ""}`,
     content,
   };
+}
+
+function diffLineTargetLine(hunk: ReviewHunk, rowId: string): number {
+  const selectedIndex = hunk.bodyLines.findIndex(
+    (_line, candidateIndex) => diffLineRowId(hunk, candidateIndex) === rowId,
+  );
+  if (selectedIndex === -1) return hunk.jumpLine;
+
+  let latestLine = hunk.jumpLine;
+  for (let index = 0; index <= selectedIndex; index++) {
+    const parsed = parseDiffLine(hunk.bodyLines[index] ?? "");
+    if (!parsed || parsed.marker === "-") continue;
+
+    const explicitLine = Number.parseInt(parsed.prefix.slice(1).trim(), 10);
+    if (Number.isFinite(explicitLine)) {
+      latestLine = explicitLine;
+    }
+  }
+  return latestLine;
 }
 
 interface UndoEditResult {
