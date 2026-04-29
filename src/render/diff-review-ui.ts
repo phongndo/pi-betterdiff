@@ -2136,13 +2136,6 @@ export class DiffReviewComponent implements Component {
     const hunk = this.findHunkForRow(row);
     if (!hunk) return undefined;
 
-    if (row.kind === "diff") {
-      return {
-        path: hunk.path,
-        line: diffLineTargetLine(hunk, row.id),
-      };
-    }
-
     return { path: hunk.path, line: hunk.jumpLine };
   }
 
@@ -2335,50 +2328,6 @@ function parseDiffLine(line: string): ParsedDiffLine | undefined {
     prefix: `${marker}${lineNumber}${content ? " " : ""}`,
     content,
   };
-}
-
-function diffLineTargetLine(hunk: ReviewHunk, rowId: string): number {
-  const selectedIndex = hunk.bodyLines.findIndex(
-    (_line, candidateIndex) => diffLineRowId(hunk, candidateIndex) === rowId,
-  );
-  if (selectedIndex === -1) return hunk.jumpLine;
-
-  let nextNewLine = Math.max(1, hunk.newStart ?? hunk.jumpLine);
-  let nextOldLine = Math.max(1, hunk.oldStart ?? hunk.jumpLine);
-  let targetLine = Math.max(1, hunk.jumpLine);
-
-  for (let index = 0; index <= selectedIndex; index++) {
-    const line = hunk.bodyLines[index] ?? "";
-    const parsed = parseDiffLine(line);
-    if (!parsed) continue;
-
-    const explicitLine = explicitDiffLineNumber(hunk, line);
-    if (parsed.marker === "+") {
-      targetLine = explicitLine ?? nextNewLine;
-      nextNewLine = targetLine + 1;
-    } else if (parsed.marker === "-") {
-      targetLine = explicitLine ?? nextOldLine;
-      nextOldLine = targetLine + 1;
-    } else {
-      targetLine = explicitLine ?? nextNewLine;
-      nextNewLine = targetLine + 1;
-      nextOldLine = (explicitLine ?? nextOldLine) + 1;
-    }
-  }
-  return targetLine;
-}
-
-function explicitDiffLineNumber(
-  hunk: ReviewHunk,
-  line: string,
-): number | undefined {
-  if (hunk.toolName === "git") return undefined;
-
-  const match = /^[-+ ]\s*(\d+)/u.exec(line);
-  if (!match?.[1]) return undefined;
-
-  const lineNumber = Number.parseInt(match[1], 10);
-  return Number.isFinite(lineNumber) ? lineNumber : undefined;
 }
 
 interface UndoEditResult {

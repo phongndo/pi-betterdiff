@@ -55,7 +55,7 @@ Then use `/diff` inside pi to open the pi-diff review UI.
 - branch-aware turn navigator with locally nested file sections, `@@` hunk headers, and syntax-highlighted diff lines for the selected turn, plus file jumps via `[f` / `]f`
 - visible-row search with `/`, plus all-review grep with `?`; cycle matches via `n` / `N`
 - `enter` scoped actions menu with summaries and undo actions for the selected turn/file/hunk/diff line
-- `ctrl+g` external-editor handoff for the selected file, hunk, or diff line
+- `ctrl+g` external-editor handoff for the selected file or containing hunk
 
 ## Repo layout
 
