@@ -101,6 +101,7 @@ type DetailRow = FileRow | HunkRow | DiffLineRow;
 type FoldableDetailRow = FileRow | HunkRow;
 
 const MAX_SUMMARY_BODY_CHARS = 24_000;
+const BRACKET_CHORD_TIMEOUT_MS = 600;
 
 interface ActionMenuItem {
   id: string;
@@ -125,6 +126,11 @@ interface SearchMatch {
   file?: ReviewFile;
   hunk?: ReviewHunk;
   text: string;
+}
+
+interface BracketCommand {
+  bracket: "[" | "]";
+  target: "file" | "hunk";
 }
 
 interface DiffModeChoice {
@@ -235,7 +241,7 @@ export class DiffReviewComponent implements Component {
       truncateToWidth(
         this.theme.fg(
           "muted",
-          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. /: search. ?: grep all. n/N: next/prev. m: mode. r: refresh. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
+          `  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/dive. tab: turn/files. [h/]h: hunk. [f/]f: file. /: search. ?: grep all. n/N: next/prev. m: mode. r: refresh. enter: actions. ${keyText("app.editor.external")}: open hunk. q/esc: close`,
         ),
         width,
       ),
@@ -434,11 +440,9 @@ export class DiffReviewComponent implements Component {
     this.clearPendingBracket();
     this.pendingBracket = bracket;
     this.pendingBracketTimer = setTimeout(() => {
-      const pendingBracket = this.consumePendingBracket();
-      if (!pendingBracket) return;
-      this.moveToHunk(pendingBracket === "]" ? 1 : -1);
-      this.tui.requestRender();
-    }, 160);
+      this.pendingBracket = undefined;
+      this.pendingBracketTimer = undefined;
+    }, BRACKET_CHORD_TIMEOUT_MS);
   }
 
   private consumePendingBracket(): "[" | "]" | undefined {
@@ -480,6 +484,15 @@ export class DiffReviewComponent implements Component {
       return;
     }
 
+    const bracketCommand = parseBracketCommand(data);
+    if (bracketCommand) {
+      this.clearPendingBracket();
+      this.runBracketCommand(bracketCommand);
+      this.pendingG = false;
+      this.tui.requestRender();
+      return;
+    }
+
     if (
       this.pendingBracket &&
       (this.matchesCancel(data) || data === "q" || data === "Q")
@@ -494,10 +507,12 @@ export class DiffReviewComponent implements Component {
       this.tui.requestRender();
       return;
     }
-    if (pendingBracket) {
+    if (pendingBracket && (data === "h" || data === "H")) {
       this.moveToHunk(pendingBracket === "]" ? 1 : -1);
+      this.pendingG = false;
+      this.tui.requestRender();
+      return;
     }
-
     if (this.matchesCancel(data)) {
       this.done({ type: "close" });
       return;
@@ -660,6 +675,15 @@ export class DiffReviewComponent implements Component {
     this.searchQuery += data;
     this.selectCurrentSearchMatch();
     this.tui.requestRender();
+  }
+
+  private runBracketCommand(command: BracketCommand): void {
+    const delta = command.bracket === "]" ? 1 : -1;
+    if (command.target === "file") {
+      this.moveToFile(delta);
+    } else {
+      this.moveToHunk(delta);
+    }
   }
 
   private openSearch(mode: SearchMode): void {
@@ -1177,6 +1201,19 @@ export class DiffReviewComponent implements Component {
     );
   }
 
+  private firstReviewRowIdForTurn(turn: ReviewTurn): string {
+    for (const file of turn.files) return this.firstReviewRowIdForFile(file);
+    return turn.id;
+  }
+
+  private firstReviewRowIdForFile(file: ReviewFile): string {
+    return file.hunks[0]?.id ?? file.id;
+  }
+
+  private firstReviewRowIdForHunk(hunk: ReviewHunk): string {
+    return hunk.bodyLines.length > 0 ? diffLineRowId(hunk, 0) : hunk.id;
+  }
+
   private getRows(): RenderRow[] {
     this.cachedRows ??= this.buildRows();
     return this.cachedRows;
@@ -1245,7 +1282,7 @@ export class DiffReviewComponent implements Component {
       this.detailTurnId === turn.id ||
       this.model.mode.kind === "git-changes"
     ) {
-      this.addDetailRows(rows, turn, turnRow);
+      this.addDetailRows(rows, turn);
     }
 
     const childIds = this.sortActiveFirst(this.childrenById.get(turn.id) ?? []);
@@ -1284,18 +1321,14 @@ export class DiffReviewComponent implements Component {
     }
   }
 
-  private addDetailRows(
-    rows: RenderRow[],
-    turn: ReviewTurn,
-    turnRow: TurnRow,
-  ): void {
-    const basePrefix = this.prefixForTurnChildRows(turnRow);
+  private addDetailRows(rows: RenderRow[], turn: ReviewTurn): void {
     for (let fileIndex = 0; fileIndex < turn.files.length; fileIndex++) {
       const file = turn.files[fileIndex];
       if (!file) continue;
+
       const fileIsLast = fileIndex === turn.files.length - 1;
-      const filePrefix = `${basePrefix}${fileIsLast ? "└─ " : "├─ "}`;
-      const fileChildPrefix = `${basePrefix}${fileIsLast ? "   " : "│  "}`;
+      const filePrefix = fileIsLast ? "└─ " : "├─ ";
+      const fileChildPrefix = fileIsLast ? "   " : "│  ";
       rows.push({
         id: file.id,
         kind: "file",
@@ -1309,6 +1342,7 @@ export class DiffReviewComponent implements Component {
       for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
         const hunk = file.hunks[hunkIndex];
         if (!hunk) continue;
+
         const hunkIsLast = hunkIndex === file.hunks.length - 1;
         const hunkPrefix = `${fileChildPrefix}${hunkIsLast ? "└─ " : "├─ "}`;
         const diffPrefix = `${fileChildPrefix}${hunkIsLast ? "   " : "│  "}`;
@@ -1416,28 +1450,6 @@ export class DiffReviewComponent implements Component {
     return prefixChars.join("");
   }
 
-  private prefixForTurnChildRows(row: TurnRow): string {
-    const displayIndent = this.displayIndentForTurn(row);
-    const connector = row.showConnector && !row.isVirtualRootChild;
-    const connectorPosition = connector ? displayIndent - 1 : -1;
-    const segments: string[] = [];
-
-    for (let level = 0; level < displayIndent; level++) {
-      const gutter = row.gutters.find(
-        (candidate) => candidate.position === level,
-      );
-      if (gutter) {
-        segments.push(gutter.show ? "│  " : "   ");
-      } else if (connector && level === connectorPosition) {
-        segments.push(row.isLast ? "   " : "│  ");
-      } else {
-        segments.push("   ");
-      }
-    }
-
-    return segments.join("");
-  }
-
   private displayIndentForTurn(row: TurnRow): number {
     return this.multipleVisibleRoots ? Math.max(0, row.indent - 1) : row.indent;
   }
@@ -1456,7 +1468,7 @@ export class DiffReviewComponent implements Component {
     if (row.kind === "file") {
       content = `${this.detailFoldMarker(row)}${this.theme.fg("toolTitle", row.file.path)} ${this.statText(row.file)} ${this.hunkCountText(row.file.hunks.length)}`;
     } else if (row.kind === "hunk") {
-      content = `${this.detailFoldMarker(row)}${this.formatHunkLabel(row.hunk)} ${this.theme.fg("dim", row.hunk.path)}`;
+      content = this.formatHunkLabel(row.hunk);
     } else {
       content = `  ${this.renderDiffLine(row.text, row.hunk.path)}`;
     }
@@ -1467,18 +1479,18 @@ export class DiffReviewComponent implements Component {
   }
 
   private detailFoldMarker(row: FoldableDetailRow): string {
-    if (!this.isDetailFoldable(row)) return "  ";
+    if (!this.isDetailFoldable(row)) return "";
     return this.foldedDetailIds.has(row.id)
-      ? this.theme.fg("accent", "⊞ ")
-      : this.theme.fg("accent", "⊟ ");
+      ? this.theme.fg("accent", "▸ ")
+      : this.theme.fg("accent", "▾ ");
   }
 
   private formatHunkLabel(hunk: ReviewHunk): string {
     return [
-      this.formatHunkRegion(hunk),
+      `${this.theme.fg("muted", "@@")} ${this.formatHunkRegion(hunk)}`,
       this.theme.fg("warning", hunk.toolName),
       this.statText(hunk),
-    ].join("  ");
+    ].join(" · ");
   }
 
   private formatHunkRegion(hunk: ReviewHunk): string {
@@ -1784,54 +1796,8 @@ export class DiffReviewComponent implements Component {
       0,
       rows.findIndex((row) => row.id === this.selectedId),
     );
-    const currentRow = rows[currentIndex];
-    if (currentRow?.kind === "turn") {
-      this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
-      return;
-    }
-    if (currentRow?.kind === "file") {
-      this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
-      return;
-    }
-    if (currentRow?.kind === "hunk") {
-      this.selectRow(this.scopedRowForMovement(rows, currentRow, delta)?.id);
-      return;
-    }
-
     const nextIndex = clamp(currentIndex + delta, 0, rows.length - 1);
     this.selectRow(rows[nextIndex]?.id);
-  }
-
-  private scopedRowForMovement<T extends TurnRow | FileRow | HunkRow>(
-    rows: readonly RenderRow[],
-    currentRow: T,
-    delta: number,
-  ): T | undefined {
-    const siblings = rows.filter((row): row is T =>
-      this.isSameNavigationScope(currentRow, row),
-    );
-    if (siblings.length === 0) return undefined;
-
-    const currentIndex = siblings.findIndex((row) => row.id === currentRow.id);
-    if (currentIndex === -1) return undefined;
-
-    const nextIndex = clamp(currentIndex + delta, 0, siblings.length - 1);
-    return siblings[nextIndex];
-  }
-
-  private isSameNavigationScope<T extends TurnRow | FileRow | HunkRow>(
-    currentRow: T,
-    candidate: RenderRow,
-  ): candidate is T {
-    if (currentRow.kind === "turn") return candidate.kind === "turn";
-    if (currentRow.kind === "file") {
-      return (
-        candidate.kind === "file" && candidate.turn.id === currentRow.turn.id
-      );
-    }
-    return (
-      candidate.kind === "hunk" && candidate.file.id === currentRow.file.id
-    );
   }
 
   private moveToHunk(delta: number): void {
@@ -1890,7 +1856,7 @@ export class DiffReviewComponent implements Component {
     }
 
     if (row.kind === "hunk") {
-      this.selectRow(row.file.id);
+      this.selectRow(row.turn.id);
       return;
     }
 
@@ -1928,7 +1894,8 @@ export class DiffReviewComponent implements Component {
       const firstFile = row.turn.files[0];
       if (firstFile) {
         this.detailTurnId = row.turn.id;
-        this.selectedId = firstFile.id;
+        this.foldedDetailIds.delete(firstFile.id);
+        this.selectedId = this.firstReviewRowIdForTurn(row.turn);
         this.invalidateRows();
         return;
       }
@@ -1944,19 +1911,18 @@ export class DiffReviewComponent implements Component {
     }
 
     if (row.kind === "file") {
-      if (this.foldedDetailIds.has(row.id)) {
-        this.foldedDetailIds.delete(row.id);
-        this.invalidateRows();
-        return;
-      }
-      this.selectRow(row.file.hunks[0]?.id ?? row.id);
+      this.detailTurnId = row.turn.id;
+      this.foldedDetailIds.delete(row.id);
+      this.selectedId = this.firstReviewRowIdForFile(row.file);
+      this.invalidateRows();
       return;
     }
 
     if (row.kind === "hunk") {
-      this.selectRow(
-        row.hunk.bodyLines.length > 0 ? diffLineRowId(row.hunk, 0) : row.id,
-      );
+      this.detailTurnId = row.turn.id;
+      this.foldedDetailIds.delete(row.file.id);
+      this.selectedId = this.firstReviewRowIdForHunk(row.hunk);
+      this.invalidateRows();
     }
   }
 
@@ -2088,9 +2054,10 @@ export class DiffReviewComponent implements Component {
   private isBranchFoldable(turnId: string): boolean {
     const children = this.visibleChildrenById.get(turnId);
     if (!children || children.length === 0) return false;
+    if (children.length > 1) return true;
 
     const parentId = this.visibleParentById.get(turnId);
-    if (parentId === undefined) return true;
+    if (parentId === undefined) return false;
 
     const siblings = this.visibleChildrenById.get(parentId);
     return siblings !== undefined && siblings.length > 1;
@@ -2607,6 +2574,19 @@ function requestLabel(request: DiffReviewLoadRequest): string {
     DIFF_MODE_CHOICES.find((choice) => choice.kind === request.kind)?.label ??
     request.kind
   );
+}
+
+function parseBracketCommand(data: string): BracketCommand | undefined {
+  const chars = [...data];
+  if (chars.length !== 2) return undefined;
+
+  const [bracket, suffix] = chars;
+  if (bracket !== "[" && bracket !== "]") return undefined;
+
+  const normalizedSuffix = suffix?.toLowerCase();
+  if (normalizedSuffix === "f") return { bracket, target: "file" };
+  if (normalizedSuffix === "h") return { bracket, target: "hunk" };
+  return undefined;
 }
 
 function searchTokens(query: string): string[] {
