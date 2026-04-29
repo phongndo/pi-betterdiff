@@ -1215,8 +1215,20 @@ export class DiffReviewComponent implements Component {
   }
 
   private getRows(): RenderRow[] {
+    return this.scopeRowsForSelectedDetail(this.getAllRows());
+  }
+
+  private getAllRows(): RenderRow[] {
     this.cachedRows ??= this.buildRows();
     return this.cachedRows;
+  }
+
+  private scopeRowsForSelectedDetail(rows: readonly RenderRow[]): RenderRow[] {
+    const selectedRow = this.selectedId
+      ? rows.find((row) => row.id === this.selectedId)
+      : undefined;
+    if (!selectedRow || selectedRow.kind === "turn") return [...rows];
+    return rows.filter((row) => row.turn.id === selectedRow.turn.id);
   }
 
   private invalidateRows(): void {
@@ -2027,7 +2039,7 @@ export class DiffReviewComponent implements Component {
     options: { preserveDetailTurn?: boolean } = {},
   ): void {
     if (!id) return;
-    const row = this.getRows().find((candidate) => candidate.id === id);
+    const row = this.getAllRows().find((candidate) => candidate.id === id);
     this.selectedId = id;
     if (!row) return;
 

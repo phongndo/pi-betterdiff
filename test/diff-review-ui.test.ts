@@ -564,10 +564,9 @@ describe("DiffReviewComponent", () => {
     component.handleInput("j");
     const rendered = renderComponent(component);
 
-    expect(rendered).toContain(
-      "<selectedBg>› user: second change +2 -1 1 file 1 hunk</selectedBg>",
-    );
+    expect(rendered).toContain("+1 changed</selectedBg>");
     expect(rendered).toContain("src/first.ts +1 -0 1 hunk");
+    expect(rendered).not.toContain("user: second change");
     expect(rendered).not.toContain("src/second.ts +2 -1 1 hunk");
   });
 
