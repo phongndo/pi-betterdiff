@@ -556,6 +556,21 @@ describe("DiffReviewComponent", () => {
     expect(rendered).not.toContain("src/first.ts +1 -0 1 hunk");
   });
 
+  it("keeps turn details open when moving past the end of its diff", () => {
+    const component = createComponent(buildTwoTurnModel());
+
+    component.handleInput("l");
+    component.handleInput("l");
+    component.handleInput("j");
+    const rendered = renderComponent(component);
+
+    expect(rendered).toContain(
+      "<selectedBg>› user: second change +2 -1 1 file 1 hunk</selectedBg>",
+    );
+    expect(rendered).toContain("src/first.ts +1 -0 1 hunk");
+    expect(rendered).not.toContain("src/second.ts +2 -1 1 hunk");
+  });
+
   it("collapses selected turn details with h and re-enters them with l", () => {
     const component = createComponent(
       buildReviewModel({

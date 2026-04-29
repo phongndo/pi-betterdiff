@@ -1790,8 +1790,16 @@ export class DiffReviewComponent implements Component {
       0,
       rows.findIndex((row) => row.id === this.selectedId),
     );
+    const currentRow = rows[currentIndex];
     const nextIndex = clamp(currentIndex + delta, 0, rows.length - 1);
-    this.selectRow(rows[nextIndex]?.id);
+    const nextRow = rows[nextIndex];
+    const preserveDetailTurn =
+      currentRow !== undefined &&
+      currentRow.kind !== "turn" &&
+      nextRow?.kind === "turn" &&
+      this.detailTurnId === currentRow.turn.id &&
+      nextRow.turn.id !== currentRow.turn.id;
+    this.selectRow(nextRow?.id, { preserveDetailTurn });
   }
 
   private moveToHunk(delta: number): void {
@@ -2014,14 +2022,21 @@ export class DiffReviewComponent implements Component {
     this.selectRow(rows[rows.length - 1]?.id);
   }
 
-  private selectRow(id: string | undefined): void {
+  private selectRow(
+    id: string | undefined,
+    options: { preserveDetailTurn?: boolean } = {},
+  ): void {
     if (!id) return;
     const row = this.getRows().find((candidate) => candidate.id === id);
     this.selectedId = id;
     if (!row) return;
 
     if (row.kind === "turn") {
-      if (this.detailTurnId && this.detailTurnId !== row.id) {
+      if (
+        this.detailTurnId &&
+        this.detailTurnId !== row.id &&
+        !options.preserveDetailTurn
+      ) {
         this.detailTurnId = undefined;
         this.invalidateRows();
       }
