@@ -2357,8 +2357,8 @@ function diffLineTargetLine(hunk: ReviewHunk, rowId: string): number {
       targetLine = explicitLine ?? nextNewLine;
       nextNewLine = targetLine + 1;
     } else if (parsed.marker === "-") {
-      targetLine = explicitLine ?? nextNewLine;
-      nextOldLine = (explicitLine ?? nextOldLine) + 1;
+      targetLine = explicitLine ?? nextOldLine;
+      nextOldLine = targetLine + 1;
     } else {
       targetLine = explicitLine ?? nextNewLine;
       nextNewLine = targetLine + 1;

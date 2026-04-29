@@ -693,6 +693,63 @@ describe("DiffReviewComponent", () => {
     }
   });
 
+  it("opens unnumbered deletion rows at the inferred old-side line", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "betterdiff-open-deletion-line-"));
+    const originalEditor = process.env.EDITOR;
+    const originalVisual = process.env.VISUAL;
+    try {
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src/a.ts"), "one\ntwo\nthree\n", "utf8");
+      process.env.VISUAL = "";
+      process.env.EDITOR = "true";
+      const model = buildReviewModel({
+        files: [
+          {
+            path: "src/a.ts",
+            hunks: [
+              {
+                jumpLine: 2393,
+                newLines: 2,
+                additions: 0,
+                removals: 1,
+                toolName: "git",
+                bodyLines: ["-removed", " context after"],
+              },
+            ],
+          },
+        ],
+      });
+      const hunk = model.turns[0]?.files[0]?.hunks[0];
+      if (!hunk) throw new Error("missing hunk");
+      hunk.oldStart = 2394;
+      hunk.oldLines = 2;
+      hunk.newStart = 2393;
+      hunk.newLines = 1;
+
+      const component = createComponent(
+        model,
+        theme,
+        () => {},
+        keybindings,
+        cwd,
+      );
+
+      component.handleInput("l");
+      component.handleInput("l");
+      component.handleInput("\u0007");
+
+      expect(renderComponent(component)).toContain(
+        "Returned from true at src/a.ts:2394",
+      );
+    } finally {
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
+      if (originalVisual === undefined) delete process.env.VISUAL;
+      else process.env.VISUAL = originalVisual;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("undoes selected edit hunks after confirmation", () => {
     const cwd = mkdtempSync(join(tmpdir(), "betterdiff-undo-"));
     try {
