@@ -2343,17 +2343,42 @@ function diffLineTargetLine(hunk: ReviewHunk, rowId: string): number {
   );
   if (selectedIndex === -1) return hunk.jumpLine;
 
-  let latestLine = hunk.jumpLine;
-  for (let index = 0; index <= selectedIndex; index++) {
-    const parsed = parseDiffLine(hunk.bodyLines[index] ?? "");
-    if (!parsed || parsed.marker === "-") continue;
+  let nextNewLine = Math.max(1, hunk.newStart ?? hunk.jumpLine);
+  let nextOldLine = Math.max(1, hunk.oldStart ?? hunk.jumpLine);
+  let targetLine = Math.max(1, hunk.jumpLine);
 
-    const explicitLine = Number.parseInt(parsed.prefix.slice(1).trim(), 10);
-    if (Number.isFinite(explicitLine)) {
-      latestLine = explicitLine;
+  for (let index = 0; index <= selectedIndex; index++) {
+    const line = hunk.bodyLines[index] ?? "";
+    const parsed = parseDiffLine(line);
+    if (!parsed) continue;
+
+    const explicitLine = explicitDiffLineNumber(hunk, line);
+    if (parsed.marker === "+") {
+      targetLine = explicitLine ?? nextNewLine;
+      nextNewLine = targetLine + 1;
+    } else if (parsed.marker === "-") {
+      targetLine = explicitLine ?? nextNewLine;
+      nextOldLine = (explicitLine ?? nextOldLine) + 1;
+    } else {
+      targetLine = explicitLine ?? nextNewLine;
+      nextNewLine = targetLine + 1;
+      nextOldLine = (explicitLine ?? nextOldLine) + 1;
     }
   }
-  return latestLine;
+  return targetLine;
+}
+
+function explicitDiffLineNumber(
+  hunk: ReviewHunk,
+  line: string,
+): number | undefined {
+  if (hunk.toolName === "git") return undefined;
+
+  const match = /^[-+ ]\s*(\d+)/u.exec(line);
+  if (!match?.[1]) return undefined;
+
+  const lineNumber = Number.parseInt(match[1], 10);
+  return Number.isFinite(lineNumber) ? lineNumber : undefined;
 }
 
 interface UndoEditResult {

@@ -49,11 +49,6 @@ const keybindings = {
   matches: () => false,
 } as unknown as KeybindingsManager;
 
-const externalEditorKeybindings = {
-  matches: (data: string, id: string) =>
-    data === "x" && id === "app.editor.external",
-} as unknown as KeybindingsManager;
-
 describe("DiffReviewComponent", () => {
   it("renders hunk labels from structured fields", () => {
     const model = buildReviewModel({
@@ -529,12 +524,12 @@ describe("DiffReviewComponent", () => {
         }),
         theme,
         () => {},
-        externalEditorKeybindings,
+        keybindings,
         cwd,
       );
 
       component.handleInput("\t");
-      component.handleInput("x");
+      component.handleInput("\u0007");
 
       expect(renderComponent(component)).toContain(
         "Returned from true at src/a.ts:1",
@@ -576,12 +571,12 @@ describe("DiffReviewComponent", () => {
         }),
         theme,
         () => {},
-        externalEditorKeybindings,
+        keybindings,
         cwd,
       );
 
       component.handleInput("l");
-      component.handleInput("x");
+      component.handleInput("\u0007");
 
       expect(renderComponent(component)).toContain(
         "Returned from true at src/a.ts:7",
@@ -624,7 +619,7 @@ describe("DiffReviewComponent", () => {
         }),
         theme,
         () => {},
-        externalEditorKeybindings,
+        keybindings,
         cwd,
       );
 
@@ -633,10 +628,61 @@ describe("DiffReviewComponent", () => {
       component.handleInput("j");
       component.handleInput("j");
       component.handleInput("j");
-      component.handleInput("x");
+      component.handleInput("\u0007");
 
       expect(renderComponent(component)).toContain(
         "Returned from true at src/a.ts:11",
+      );
+    } finally {
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
+      if (originalVisual === undefined) delete process.env.VISUAL;
+      else process.env.VISUAL = originalVisual;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("opens unnumbered git diff lines at the inferred current-side line", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "betterdiff-open-git-line-"));
+    const originalEditor = process.env.EDITOR;
+    const originalVisual = process.env.VISUAL;
+    try {
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src/a.ts"), "one\ntwo\nthree\n", "utf8");
+      process.env.VISUAL = "";
+      process.env.EDITOR = "true";
+      const component = createComponent(
+        buildReviewModel({
+          files: [
+            {
+              path: "src/a.ts",
+              hunks: [
+                {
+                  jumpLine: 10,
+                  newLines: 3,
+                  additions: 2,
+                  removals: 0,
+                  toolName: "git",
+                  bodyLines: [" context", "+added", "+more"],
+                },
+              ],
+            },
+          ],
+        }),
+        theme,
+        () => {},
+        keybindings,
+        cwd,
+      );
+
+      component.handleInput("l");
+      component.handleInput("l");
+      component.handleInput("j");
+      component.handleInput("j");
+      component.handleInput("\u0007");
+
+      expect(renderComponent(component)).toContain(
+        "Returned from true at src/a.ts:12",
       );
     } finally {
       if (originalEditor === undefined) delete process.env.EDITOR;
