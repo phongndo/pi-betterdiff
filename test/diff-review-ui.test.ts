@@ -659,6 +659,26 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("@@ lines 30-31 · write · +3 -2");
   });
 
+  it("expands all files and hunks when pressing e on a turn", () => {
+    const component = createComponent(buildPluralModel());
+
+    component.handleInput("\t");
+    component.handleInput("c");
+    let rendered = renderComponent(component);
+    expect(rendered).not.toContain("@@ lines 7-9 · edit · +2 -1");
+    expect(rendered).not.toContain("@@ lines 30-31 · write · +3 -2");
+
+    component.handleInput("\t");
+    component.handleInput("e");
+    rendered = renderComponent(component);
+
+    expect(rendered).toContain(
+      "<selectedBg>› • user: change many files +6 -3 2 files 3 hunks</selectedBg>",
+    );
+    expect(rendered).toContain("@@ lines 7-9 · edit · +2 -1");
+    expect(rendered).toContain("@@ lines 30-31 · write · +3 -2");
+  });
+
   it("keeps hunk rows non-collapsible", () => {
     const component = createComponent(buildPluralModel());
 

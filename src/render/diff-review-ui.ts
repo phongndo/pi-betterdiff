@@ -1970,6 +1970,9 @@ export class DiffReviewComponent implements Component {
       this.detailTurnId = row.id;
       changed = true;
     }
+    for (const file of row.turn.files) {
+      if (this.foldedDetailIds.delete(file.id)) changed = true;
+    }
     if (changed) this.invalidateRows();
   }
 
