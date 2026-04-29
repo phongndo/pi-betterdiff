@@ -534,7 +534,7 @@ describe("DiffReviewComponent", () => {
     component.handleInput("l");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>›    └─ @@ line 1 · edit · +1 -0</selectedBg>",
+      "<selectedBg>›    @@ line 1 · edit · +1 -0</selectedBg>",
     );
   });
 
@@ -589,7 +589,7 @@ describe("DiffReviewComponent", () => {
     component.handleInput("l");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>›    └─ @@ line 7 · edit · +1 -0</selectedBg>",
+      "<selectedBg>›    @@ line 7 · edit · +1 -0</selectedBg>",
     );
 
     component.handleInput("h");
@@ -666,7 +666,7 @@ describe("DiffReviewComponent", () => {
     component.handleInput("j");
     let rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
     expect(rendered).toContain("+7 changed");
     expect(rendered).toContain("+20 changed");
@@ -675,7 +675,7 @@ describe("DiffReviewComponent", () => {
     component.handleInput("c");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
     expect(rendered).toContain("+7 changed");
     expect(rendered).toContain("+20 changed");
@@ -708,7 +708,7 @@ describe("DiffReviewComponent", () => {
     hunkComponent.handleInput("l");
     rendered = renderComponent(hunkComponent);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
   });
 
@@ -720,13 +720,13 @@ describe("DiffReviewComponent", () => {
     component.handleInput("h");
     let rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  └─ @@ line 20 · edit · +1 -0</selectedBg>",
+      "<selectedBg>› │  @@ line 20 · edit · +1 -0</selectedBg>",
     );
 
     component.handleInput("[h");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
   });
 
@@ -740,14 +740,14 @@ describe("DiffReviewComponent", () => {
       vi.advanceTimersByTime(650);
       let rendered = renderComponent(component);
       expect(rendered).toContain(
-        "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+        "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
       );
 
       component.handleInput("[");
       vi.advanceTimersByTime(650);
       rendered = renderComponent(component);
       expect(rendered).toContain(
-        "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+        "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
       );
     } finally {
       vi.useRealTimers();
@@ -777,17 +777,17 @@ describe("DiffReviewComponent", () => {
     component.handleInput("l");
     let rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
 
     component.handleInput("l");
     rendered = renderComponent(component);
-    expect(rendered).toContain("<selectedBg>› │  │    +7 changed</selectedBg>");
+    expect(rendered).toContain("<selectedBg>› │    +7 changed</selectedBg>");
 
     component.handleInput("j");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  └─ @@ line 20 · edit · +1 -0</selectedBg>",
+      "<selectedBg>› │  @@ line 20 · edit · +1 -0</selectedBg>",
     );
 
     const hunkComponent = createComponent(buildPluralModel());
@@ -795,7 +795,7 @@ describe("DiffReviewComponent", () => {
     hunkComponent.handleInput("j");
     rendered = renderComponent(hunkComponent);
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
   });
 
@@ -831,7 +831,7 @@ describe("DiffReviewComponent", () => {
     rendered = renderComponent(component);
     expect(rendered).toContain("Search: src/b.ts  2/2");
     expect(rendered).toContain(
-      "<selectedBg>›    └─ @@ lines 30-31 · write · +3 -2</selectedBg>",
+      "<selectedBg>›    @@ lines 30-31 · write · +3 -2</selectedBg>",
     );
 
     component.handleInput("N");
@@ -873,7 +873,7 @@ describe("DiffReviewComponent", () => {
     rendered = renderComponent(hunkComponent);
     expect(rendered).toContain("Search: lines 7-9 edit +2 -1 src/a.ts▌  1/1");
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
   });
 
@@ -1011,7 +1011,7 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("Grep all: line 7▌  1/1");
     expect(rendered).toContain("▾ src/a.ts +3 -1 2 hunks");
     expect(rendered).toContain(
-      "<selectedBg>› │  ├─ @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
     );
   });
 

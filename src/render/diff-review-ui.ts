@@ -1339,19 +1339,13 @@ export class DiffReviewComponent implements Component {
       });
       if (this.foldedDetailIds.has(file.id)) continue;
 
-      for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex++) {
-        const hunk = file.hunks[hunkIndex];
-        if (!hunk) continue;
-
-        const hunkIsLast = hunkIndex === file.hunks.length - 1;
-        const hunkPrefix = `${fileChildPrefix}${hunkIsLast ? "└─ " : "├─ "}`;
-        const diffPrefix = `${fileChildPrefix}${hunkIsLast ? "   " : "│  "}`;
+      for (const hunk of file.hunks) {
         rows.push({
           id: hunk.id,
           kind: "hunk",
           selectable: true,
           turn,
-          prefix: hunkPrefix,
+          prefix: fileChildPrefix,
           file,
           hunk,
         });
@@ -1361,7 +1355,7 @@ export class DiffReviewComponent implements Component {
             kind: "diff",
             selectable: true,
             turn,
-            prefix: diffPrefix,
+            prefix: fileChildPrefix,
             file,
             hunk,
             text: hunk.bodyLines[index] ?? "",
