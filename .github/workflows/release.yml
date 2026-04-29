@@ -50,7 +50,7 @@ jobs:
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pi-betterdiff-package
+          name: pi-diff-package
           path: "*.tgz"
 
       - name: Create GitHub release

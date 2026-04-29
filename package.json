@@ -1,5 +1,5 @@
 {
-  "name": "pi-betterdiff",
+  "name": "pi-diff",
   "version": "0.1.0",
   "private": false,
   "description": "Tree-inspired pi extension for reviewing session and git diffs.",
@@ -10,7 +10,7 @@
   "keywords": [
     "pi-package",
     "pi-extension",
-    "betterdiff",
+    "pi-diff",
     "diff"
   ],
   "files": [
@@ -59,6 +59,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/phongndo/pi-betterdiff.git"
+    "url": "git+https://github.com/phongndo/pi-diff.git"
   }
 }

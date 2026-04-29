@@ -1,14 +1,14 @@
-# pi-betterdiff
+# pi-diff
 
 A [pi](https://pi.dev) extension package focused on better session-diff ergonomics.
 
 The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations across the current pi session tree, plus practical Git changes and branch comparison modes.
 
-![BetterDiff session tree reviewing a pi session branch](docs/screenshots/betterdiff-session-tree.svg)
+![pi-diff session tree reviewing a pi session branch](docs/screenshots/betterdiff-session-tree.svg)
 
 <p>
-  <img src="docs/screenshots/betterdiff-git-changes.svg" alt="BetterDiff Git changes mode with staged changes above unstaged and untracked changes" width="49%">
-  <img src="docs/screenshots/betterdiff-scoped-actions.svg" alt="BetterDiff scoped actions menu for summaries and undo actions" width="49%">
+  <img src="docs/screenshots/betterdiff-git-changes.svg" alt="pi-diff Git changes mode with staged changes above unstaged and untracked changes" width="49%">
+  <img src="docs/screenshots/betterdiff-scoped-actions.svg" alt="pi-diff scoped actions menu for summaries and undo actions" width="49%">
 </p>
 
 ## Install
@@ -16,19 +16,19 @@ The extension now includes an initial `/diff` UI prototype for reviewing agent-p
 Install from npm:
 
 ```bash
-pi install npm:pi-betterdiff
+pi install npm:pi-diff
 ```
 
 Install directly from GitHub:
 
 ```bash
-pi install git:github.com/phongndo/pi-betterdiff
+pi install git:github.com/phongndo/pi-diff
 ```
 
 Install a pinned GitHub release/tag:
 
 ```bash
-pi install git:github.com/phongndo/pi-betterdiff@v0.1.0
+pi install git:github.com/phongndo/pi-diff@v0.1.0
 ```
 
 Try without installing:
@@ -37,7 +37,7 @@ Try without installing:
 pi -e .
 ```
 
-Then use `/diff` inside pi to open the BetterDiff review UI.
+Then use `/diff` inside pi to open the pi-diff review UI.
 
 ## What is included
 
