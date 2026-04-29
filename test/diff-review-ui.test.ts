@@ -149,6 +149,27 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("+30 changed");
   });
 
+  it("renders current scope in the footer", () => {
+    const component = createComponent(buildPluralModel());
+
+    let rendered = renderComponent(component);
+    expect(rendered).toContain("(1/9) turn 1/1");
+
+    component.handleInput("\t");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("(2/9) turn 1/1 · file 1/2");
+
+    component.handleInput("l");
+    rendered = renderComponent(component);
+    expect(rendered).toContain("(3/9) turn 1/1 · file 1/2 · hunk 1/3");
+
+    component.handleInput("l");
+    rendered = renderComponent(component);
+    expect(rendered).toContain(
+      "(4/9) turn 1/1 · file 1/2 · hunk 1/3 · line 1/1",
+    );
+  });
+
   it("renders summary additions and removals as separate color segments", () => {
     const rendered = renderModel(buildPluralModel(), colorTracingTheme);
 

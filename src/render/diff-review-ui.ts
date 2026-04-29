@@ -2149,7 +2149,48 @@ export class DiffReviewComponent implements Component {
       0,
       rows.findIndex((row) => row.id === this.selectedId) + 1,
     );
-    return `  (${position}/${rows.length})`;
+    const selectedRow = this.getSelectedRow();
+    const scopeText = selectedRow ? this.scopeStatusText(selectedRow) : "";
+    return `  (${position}/${rows.length})${scopeText ? ` ${scopeText}` : ""}`;
+  }
+
+  private scopeStatusText(row: RenderRow): string {
+    const parts = [this.turnScopeText(row.turn)];
+    if (row.kind !== "turn") parts.push(this.fileScopeText(row.file));
+    if (row.kind === "hunk" || row.kind === "diff") {
+      parts.push(this.hunkScopeText(row.hunk, row.turn));
+    }
+    if (row.kind === "diff")
+      parts.push(this.diffLineScopeText(row.hunk, row.id));
+    return parts.join(" · ");
+  }
+
+  private turnScopeText(turn: ReviewTurn): string {
+    const index = this.model.turns.findIndex(
+      (candidate) => candidate.id === turn.id,
+    );
+    const label = this.model.mode.kind === "session-turns" ? "turn" : "section";
+    return `${label} ${index === -1 ? "?" : index + 1}/${this.model.turns.length}`;
+  }
+
+  private fileScopeText(file: ReviewFile): string {
+    const turn = this.turnsById.get(file.turnId);
+    const index =
+      turn?.files.findIndex((candidate) => candidate.id === file.id) ?? -1;
+    return `file ${index === -1 ? "?" : index + 1}/${turn?.files.length ?? "?"}`;
+  }
+
+  private hunkScopeText(hunk: ReviewHunk, turn: ReviewTurn): string {
+    const hunks = this.getAllHunks(turn);
+    const index = hunks.findIndex((candidate) => candidate.id === hunk.id);
+    return `hunk ${index === -1 ? "?" : index + 1}/${hunks.length}`;
+  }
+
+  private diffLineScopeText(hunk: ReviewHunk, rowId: string): string {
+    const index = hunk.bodyLines.findIndex(
+      (_line, candidateIndex) => diffLineRowId(hunk, candidateIndex) === rowId,
+    );
+    return `line ${index === -1 ? "?" : index + 1}/${hunk.bodyLines.length}`;
   }
 
   private statText(stats: { additions: number; removals: number }): string {
