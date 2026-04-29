@@ -2149,9 +2149,7 @@ export class DiffReviewComponent implements Component {
       0,
       rows.findIndex((row) => row.id === this.selectedId) + 1,
     );
-    const selectedRow = this.getSelectedRow();
-    if (!selectedRow) return "  (0/0)";
-    return `  (${position}/${rows.length}) ${this.describeRow(selectedRow)}`;
+    return `  (${position}/${rows.length})`;
   }
 
   private statText(stats: { additions: number; removals: number }): string {
@@ -2247,17 +2245,6 @@ export class DiffReviewComponent implements Component {
 
   private turnLabelPrefix(): string {
     return this.model.mode.kind === "session-turns" ? "user: " : "";
-  }
-
-  private describeRow(row: RenderRow): string {
-    if (row.kind === "turn") return this.turnLabel(row.turn);
-    if (row.kind === "file") {
-      return `${row.file.path} • ${this.hunkCountPlainText(row.file.hunks.length)}`;
-    }
-    if (row.kind === "hunk") {
-      return `${row.hunk.path}:${row.hunk.jumpLine} • ${keyText("app.editor.external")} opens here`;
-    }
-    return `${row.hunk.path}:${row.hunk.jumpLine} • diff line`;
   }
 }
 
