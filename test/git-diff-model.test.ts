@@ -136,6 +136,50 @@ describe("parseGitChangesReviewModel", () => {
     expect(model.turns[0]?.files[0]?.path).toBe("docs/hello world.md");
   });
 
+  it("decodes git-quoted UTF-8 path escapes", () => {
+    const patch = [
+      'diff --git "a/\\303\\251.txt" "b/\\303\\251.txt"',
+      "index 1111111..2222222 100644",
+      '--- "a/\\303\\251.txt"',
+      '+++ "b/\\303\\251.txt"',
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+    ].join("\n");
+
+    const model = parseGitChangesReviewModel(patch, "");
+
+    expect(model.turns[0]?.files[0]?.path).toBe("é.txt");
+  });
+
+  it("preserves meaningful trailing spaces in git paths", () => {
+    const patch = [
+      "diff --git a/trail.txt  b/trail.txt ",
+      "index 1111111..2222222 100644",
+      "--- a/trail.txt \t",
+      "+++ b/trail.txt \t",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+    ].join("\n");
+
+    const model = parseGitChangesReviewModel(patch, "");
+
+    expect(model.turns[0]?.files[0]?.path).toBe("trail.txt ");
+  });
+
+  it("keeps binary paths containing repeated b/ segments", () => {
+    const patch = [
+      "diff --git a/foo b/bar b/baz.bin b/foo b/bar b/baz.bin",
+      "index e7be1ea..f9e371f 100644",
+      "Binary files a/foo b/bar b/baz.bin and b/foo b/bar b/baz.bin differ",
+    ].join("\n");
+
+    const model = parseGitChangesReviewModel(patch, "");
+
+    expect(model.turns[0]?.files[0]?.path).toBe("foo b/bar b/baz.bin");
+  });
+
   it("creates metadata hunks for binary or mode-only diffs", () => {
     const patch = [
       "diff --git a/image.png b/image.png",

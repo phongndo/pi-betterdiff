@@ -1,3 +1,5 @@
+import { TextDecoder } from "node:util";
+
 import type {
   ReviewFile,
   ReviewHunk,
@@ -48,6 +50,18 @@ const GIT_DIFF_BASE_ARGS = [
   "--patch",
   "--find-renames",
 ] as const;
+
+const GIT_PATH_DECODER = new TextDecoder("utf-8");
+
+const SIMPLE_GIT_ESCAPES = new Map<string, string>([
+  ["\\", "\\"],
+  ['"', '"'],
+  ["n", "\n"],
+  ["r", "\r"],
+  ["t", "\t"],
+  ["b", "\b"],
+  ["f", "\f"],
+]);
 
 export function gitDiffArgs(section: GitDiffSectionKind): string[] {
   return section === "staged"
@@ -161,7 +175,7 @@ function parseGitPatchFiles(patch: string, turnId: string): ReviewFile[] {
       continue;
     }
 
-    const renameFrom = parseRenamePathLine(line, "rename from ");
+    const renameFrom = parseMetadataPathLine(line, "rename from ");
     if (renameFrom !== undefined) {
       currentFile.oldPath = renameFrom;
       currentFile.path = chooseDisplayPath(currentFile);
@@ -170,9 +184,27 @@ function parseGitPatchFiles(patch: string, turnId: string): ReviewFile[] {
       continue;
     }
 
-    const renameTo = parseRenamePathLine(line, "rename to ");
+    const renameTo = parseMetadataPathLine(line, "rename to ");
     if (renameTo !== undefined) {
       currentFile.newPath = renameTo;
+      currentFile.path = chooseDisplayPath(currentFile);
+      currentFile.metadataLines.push(line);
+      currentHunk = undefined;
+      continue;
+    }
+
+    const copyFrom = parseMetadataPathLine(line, "copy from ");
+    if (copyFrom !== undefined) {
+      currentFile.oldPath = copyFrom;
+      currentFile.path = chooseDisplayPath(currentFile);
+      currentFile.metadataLines.push(line);
+      currentHunk = undefined;
+      continue;
+    }
+
+    const copyTo = parseMetadataPathLine(line, "copy to ");
+    if (copyTo !== undefined) {
+      currentFile.newPath = copyTo;
       currentFile.path = chooseDisplayPath(currentFile);
       currentFile.metadataLines.push(line);
       currentHunk = undefined;
@@ -446,34 +478,54 @@ function parseDiffGitPathTokens(
     return { oldToken: oldParsed.value, newToken: newParsed.value };
   }
 
-  const separator = text.lastIndexOf(" b/");
-  if (separator === -1) return undefined;
-  return {
-    oldToken: text.slice(0, separator),
-    newToken: text.slice(separator + 1),
-  };
+  const candidates: Array<{ oldToken: string; newToken: string }> = [];
+  for (let index = 0; index < text.length; index++) {
+    if (!text.startsWith(" b/", index)) continue;
+    const oldToken = text.slice(0, index);
+    const newToken = text.slice(index + 1);
+    if (!oldToken.startsWith("a/") || !newToken.startsWith("b/")) continue;
+    candidates.push({ oldToken, newToken });
+  }
+
+  return (
+    candidates.find(({ oldToken, newToken }) => {
+      const oldPath = normalizeGitPath(oldToken);
+      const newPath = normalizeGitPath(newToken);
+      return oldPath !== undefined && oldPath === newPath;
+    }) ?? candidates[0]
+  );
 }
 
 function parseOldPathLine(line: string): string | undefined {
   if (!line.startsWith("--- ")) return undefined;
-  return normalizeGitPath(line.slice(4));
+  return normalizeGitFileHeaderPath(line.slice(4));
 }
 
 function parseNewPathLine(line: string): string | undefined {
   if (!line.startsWith("+++ ")) return undefined;
-  return normalizeGitPath(line.slice(4));
+  return normalizeGitFileHeaderPath(line.slice(4));
 }
 
-function parseRenamePathLine(
+function parseMetadataPathLine(
   line: string,
-  prefix: "rename from " | "rename to ",
+  prefix: "rename from " | "rename to " | "copy from " | "copy to ",
 ): string | undefined {
   if (!line.startsWith(prefix)) return undefined;
-  return unquoteGitPath(line.slice(prefix.length).trim());
+  return unquoteGitPath(line.slice(prefix.length));
+}
+
+function normalizeGitFileHeaderPath(rawPath: string): string | undefined {
+  return normalizeGitPath(stripGitFileHeaderSuffix(rawPath));
+}
+
+function stripGitFileHeaderSuffix(rawPath: string): string {
+  if (rawPath.startsWith('"')) return rawPath;
+  const tabIndex = rawPath.indexOf("\t");
+  return tabIndex === -1 ? rawPath : rawPath.slice(0, tabIndex);
 }
 
 function normalizeGitPath(rawPath: string): string | undefined {
-  const path = unquoteGitPath(rawPath.trim());
+  const path = unquoteGitPath(rawPath);
   if (path === "/dev/null") return undefined;
   if (path.startsWith("a/") || path.startsWith("b/")) return path.slice(2);
   return path;
@@ -507,48 +559,60 @@ function parseQuotedToken(
   if (text[startIndex] !== '"') return undefined;
 
   let value = "";
+  const pendingBytes: number[] = [];
+  const flushBytes = (): void => {
+    if (pendingBytes.length === 0) return;
+    value += GIT_PATH_DECODER.decode(Uint8Array.from(pendingBytes));
+    pendingBytes.length = 0;
+  };
+
   for (let index = startIndex + 1; index < text.length; index++) {
     const char = text[index];
     if (char === undefined) break;
-    if (char === '"') return { value, nextIndex: index + 1 };
+    if (char === '"') {
+      flushBytes();
+      return { value, nextIndex: index + 1 };
+    }
     if (char !== "\\") {
+      flushBytes();
       value += char;
       continue;
     }
 
     const next = text[index + 1];
     if (next === undefined) {
+      flushBytes();
       value += "\\";
       break;
     }
 
     const decoded = decodeGitEscape(text, index + 1);
-    value += decoded.value;
+    if (decoded.kind === "byte") {
+      pendingBytes.push(decoded.byte);
+    } else {
+      flushBytes();
+      value += decoded.value;
+    }
     index = decoded.nextIndex - 1;
   }
 
   return undefined;
 }
 
-function decodeGitEscape(
-  text: string,
-  escapeStart: number,
-): { value: string; nextIndex: number } {
-  const char = text[escapeStart];
-  if (char === undefined) return { value: "", nextIndex: escapeStart };
+type DecodedGitEscape =
+  | { kind: "text"; value: string; nextIndex: number }
+  | { kind: "byte"; byte: number; nextIndex: number };
 
-  const simpleEscapes = new Map<string, string>([
-    ["\\", "\\"],
-    ['"', '"'],
-    ["n", "\n"],
-    ["r", "\r"],
-    ["t", "\t"],
-    ["b", "\b"],
-    ["f", "\f"],
-  ]);
-  const simple = simpleEscapes.get(char);
-  if (simple !== undefined)
-    return { value: simple, nextIndex: escapeStart + 1 };
+function decodeGitEscape(text: string, escapeStart: number): DecodedGitEscape {
+  const char = text[escapeStart];
+  if (char === undefined) {
+    return { kind: "text", value: "", nextIndex: escapeStart };
+  }
+
+  const simple = SIMPLE_GIT_ESCAPES.get(char);
+  if (simple !== undefined) {
+    return { kind: "text", value: simple, nextIndex: escapeStart + 1 };
+  }
 
   if (/[0-7]/u.test(char)) {
     const octal = text
@@ -556,13 +620,14 @@ function decodeGitEscape(
       .match(/^[0-7]{1,3}/u)?.[0];
     if (octal) {
       return {
-        value: String.fromCharCode(Number.parseInt(octal, 8)),
+        kind: "byte",
+        byte: Number.parseInt(octal, 8),
         nextIndex: escapeStart + octal.length,
       };
     }
   }
 
-  return { value: char, nextIndex: escapeStart + 1 };
+  return { kind: "text", value: char, nextIndex: escapeStart + 1 };
 }
 
 function skipWhitespace(text: string, startIndex: number): number {

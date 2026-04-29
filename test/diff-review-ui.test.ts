@@ -688,6 +688,56 @@ describe("DiffReviewComponent", () => {
     }
   });
 
+  it("refuses undo when matching text is away from the recorded hunk location", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "betterdiff-undo-location-"));
+    const content = "unrelated header\nbefore\nnew\nafter\nunrelated footer\n";
+    try {
+      writeFileSync(join(cwd, "a.ts"), content, "utf8");
+      const component = createComponent(
+        buildReviewModel({
+          files: [
+            {
+              path: "a.ts",
+              hunks: [
+                {
+                  jumpLine: 1000,
+                  newLines: 3,
+                  additions: 1,
+                  removals: 1,
+                  toolName: "edit",
+                  bodyLines: [
+                    " 999 before",
+                    "-1000 old",
+                    "+1000 new",
+                    " 1001 after",
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+        theme,
+        () => {},
+        keybindings,
+        cwd,
+      );
+
+      component.handleInput("\r");
+      component.handleInput("j");
+      component.handleInput("j");
+      component.handleInput("j");
+      component.handleInput("\r");
+      component.handleInput("\r");
+
+      expect(readFileSync(join(cwd, "a.ts"), "utf8")).toBe(content);
+      expect(renderComponent(component)).toContain(
+        "Undo failed: Current text for a.ts:1000 was not found at expected line 999.",
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("moves linearly through visible detail rows and l enters hunk headers", () => {
     const component = createComponent(buildTwoTurnModel());
 

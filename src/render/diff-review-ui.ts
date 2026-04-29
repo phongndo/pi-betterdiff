@@ -2303,6 +2303,7 @@ interface ParsedDiffLine {
   marker: "+" | "-" | " ";
   prefix: string;
   content: string;
+  lineNumber?: number;
 }
 
 function truncateSummaryBody(body: string): string {
@@ -2323,11 +2324,22 @@ function parseDiffLine(line: string): ParsedDiffLine | undefined {
 
   const lineNumber = match[2] ?? "";
   const content = match[3] ?? "";
-  return {
+  const parsedLine: ParsedDiffLine = {
     marker,
     prefix: `${marker}${lineNumber}${content ? " " : ""}`,
     content,
   };
+  const parsedLineNumber = parseDiffLineNumber(lineNumber);
+  return parsedLineNumber === undefined
+    ? parsedLine
+    : { ...parsedLine, lineNumber: parsedLineNumber };
+}
+
+function parseDiffLineNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 interface UndoEditResult {
@@ -2339,6 +2351,7 @@ interface ReverseHunkEdit {
   hunk: ReviewHunk;
   currentLines: string[];
   restoredLines: string[];
+  currentStartLine: number;
 }
 
 function undoEditHunks(
@@ -2370,12 +2383,13 @@ function undoEditHunks(
     const lineEnding = detectLineEnding(rawContent);
     let normalizedContent = normalizeLineEndings(rawContent);
 
-    for (const edit of [...edits].reverse()) {
-      normalizedContent = replaceLineSequenceOnce(
+    for (const edit of [...edits].sort(compareEditsFromBottom)) {
+      normalizedContent = replaceLineSequenceAtExpectedLocation(
         normalizedContent,
         edit.currentLines,
         edit.restoredLines,
         edit.hunk,
+        edit.currentStartLine,
       );
     }
 
@@ -2401,6 +2415,7 @@ function undoEditHunks(
 function reverseEditForHunk(hunk: ReviewHunk): ReverseHunkEdit {
   const currentLines: string[] = [];
   const restoredLines: string[] = [];
+  let currentStartLine: number | undefined;
 
   for (const line of hunk.bodyLines) {
     const parsed = parseDiffLine(line);
@@ -2411,10 +2426,12 @@ function reverseEditForHunk(hunk: ReviewHunk): ReverseHunkEdit {
     }
 
     if (parsed.marker === "+") {
+      currentStartLine ??= parsed.lineNumber;
       currentLines.push(parsed.content);
     } else if (parsed.marker === "-") {
       restoredLines.push(parsed.content);
     } else {
+      currentStartLine ??= parsed.lineNumber;
       currentLines.push(parsed.content);
       restoredLines.push(parsed.content);
     }
@@ -2426,36 +2443,40 @@ function reverseEditForHunk(hunk: ReviewHunk): ReverseHunkEdit {
     );
   }
 
-  return { hunk, currentLines, restoredLines };
+  return {
+    hunk,
+    currentLines,
+    restoredLines,
+    currentStartLine: Math.max(
+      1,
+      currentStartLine ?? hunk.newStart ?? hunk.jumpLine,
+    ),
+  };
 }
 
-function replaceLineSequenceOnce(
+function compareEditsFromBottom(
+  left: ReverseHunkEdit,
+  right: ReverseHunkEdit,
+): number {
+  return right.currentStartLine - left.currentStartLine;
+}
+
+function replaceLineSequenceAtExpectedLocation(
   content: string,
   searchLines: readonly string[],
   replacementLines: readonly string[],
   hunk: ReviewHunk,
+  expectedStartLine: number,
 ): string {
   const lines = content.split("\n");
-  const matches: number[] = [];
+  const matchIndex = expectedStartLine - 1;
 
-  for (let index = 0; index <= lines.length - searchLines.length; index++) {
-    if (lineSequenceMatches(lines, searchLines, index)) {
-      matches.push(index);
-    }
-  }
-
-  if (matches.length === 0) {
+  if (!lineSequenceMatches(lines, searchLines, matchIndex)) {
     throw new Error(
-      `Current text for ${hunk.path}:${hunk.jumpLine} was not found. The file may have changed after the edit.`,
-    );
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `Current text for ${hunk.path}:${hunk.jumpLine} is ambiguous (${matches.length} matches).`,
+      `Current text for ${hunk.path}:${hunk.jumpLine} was not found at expected line ${expectedStartLine}. The file may have changed after the edit.`,
     );
   }
 
-  const matchIndex = matches[0] ?? 0;
   const nextLines = [
     ...lines.slice(0, matchIndex),
     ...replacementLines,
