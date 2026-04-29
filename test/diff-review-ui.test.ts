@@ -693,7 +693,7 @@ describe("DiffReviewComponent", () => {
     expect(rendered).toContain("@@ lines 30-31 · write · +3 -2");
   });
 
-  it("keeps hunk rows non-collapsible", () => {
+  it("collapses file context when pressing c from a hunk", () => {
     const component = createComponent(buildPluralModel());
 
     component.handleInput("j");
@@ -709,13 +709,10 @@ describe("DiffReviewComponent", () => {
     component.handleInput("c");
     rendered = renderComponent(component);
     expect(rendered).toContain(
-      "<selectedBg>› │  @@ lines 7-9 · edit · +2 -1</selectedBg>",
+      "<selectedBg>› ├─ ▸ src/a.ts +3 -1 2 hunks</selectedBg>",
     );
-    expect(rendered).toContain("+7 changed");
-    expect(rendered).toContain("+20 changed");
-    expect(rendered).toContain("+30 changed");
-    expect(rendered).not.toContain("▸ @@ lines 7-9");
-    expect(rendered).not.toContain("▾ @@ lines 7-9");
+    expect(rendered).not.toContain("@@ lines 7-9 · edit · +2 -1");
+    expect(rendered).not.toContain("@@ lines 30-31 · write · +3 -2");
   });
 
   it("jumps between files while hunks stay visible until l enters diff lines", () => {

@@ -1947,10 +1947,9 @@ export class DiffReviewComponent implements Component {
       this.collapseTurnScope(row);
     } else if (row.kind === "file") {
       this.collapseFileLevel(row.turn);
-    } else if (row.kind === "hunk") {
-      return;
     } else {
-      this.selectRow(row.hunk.id);
+      this.selectRow(row.file.id);
+      this.collapseFileLevel(row.turn);
     }
   }
 
@@ -1959,14 +1958,8 @@ export class DiffReviewComponent implements Component {
     if (!row) return;
     if (row.kind === "turn") {
       this.expandTurnScope(row);
-    } else if (row.kind === "file") {
-      this.expandFileLevel(row.turn);
-    } else if (row.kind === "hunk") {
-      this.selectRow(
-        row.hunk.bodyLines.length > 0 ? diffLineRowId(row.hunk, 0) : row.id,
-      );
     } else {
-      this.selectRow(row.id);
+      this.expandFileLevel(row.turn);
     }
   }
 
