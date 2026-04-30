@@ -28,7 +28,7 @@ pi install git:github.com/phongndo/pi-diff
 Install a pinned GitHub release/tag:
 
 ```bash
-pi install git:github.com/phongndo/pi-diff@v0.1.1
+pi install git:github.com/phongndo/pi-diff@v0.1.2
 ```
 
 Try without installing:
@@ -99,6 +99,7 @@ Then use `/diff` inside pi to open the diff review UI. Use `m` inside the UI to 
 - `npm run test:coverage` — run Vitest with coverage
 - `npm run check` — run formatting, lint, type, and test checks
 - `npm run pack:check` — verify the package can be packed cleanly
+- `npm run pack:smoke` — pack the package, extract it, and verify pi loads the extension entrypoint
 - `npm run ci` — local CI-equivalent pipeline
 - `npm run dev:pi` — load the package directly into pi
 
@@ -107,14 +108,14 @@ Then use `/diff` inside pi to open the diff review UI. Use `m` inside the UI to 
 ### CI
 
 `.github/workflows/ci.yml` runs on pull requests and pushes to `main`.
-It installs dependencies, runs the full quality pipeline, and verifies that `npm pack` succeeds.
+It installs dependencies, runs the full quality pipeline, verifies that `npm pack` succeeds, and smoke-tests the packed extension entrypoint.
 
 ### CD
 
 `.github/workflows/release.yml` runs on `v*` tags and on manual dispatch.
-It re-validates the package, creates a tarball with `npm pack`, uploads it as a workflow artifact, and attaches it to a GitHub release when triggered by a tag.
+It verifies the tag matches `package.json`, re-validates the package, smoke-tests the packed extension, creates a tarball with `npm pack`, uploads it as a workflow artifact, and attaches it to a GitHub release when triggered by a tag.
 
-Tagged releases publish to npm when `NPM_TOKEN` is configured; otherwise the workflow still builds and attaches the package tarball.
+Tagged releases publish `pi-diff` to npm with OIDC trusted publishing when configured, falling back to `NPM_TOKEN` for token-based publishing.
 
 ## Next steps
 

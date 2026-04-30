@@ -1,6 +1,6 @@
 {
   "name": "pi-diff",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "description": "Tree-inspired pi extension for reviewing session and git diffs.",
   "type": "module",
@@ -18,17 +18,22 @@
     "docs",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
-    "ci": "npm run check && npm run pack:check",
+    "ci": "npm run check && npm run pack:check && npm run pack:smoke",
     "dev:pi": "pi -e .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint --max-warnings 0 src test vitest.config.ts",
     "lint:fix": "npm run lint -- --fix",
     "pack:check": "npm pack --dry-run --ignore-scripts",
+    "pack:smoke": "node scripts/verify-package-extension.mjs",
     "prepack": "npm run check",
-    "release:verify": "npm run check && npm run pack:check",
+    "release:verify": "npm run check && npm run pack:check && npm run pack:smoke",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -59,6 +64,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/phongndo/pi-diff.git"
+    "url": "https://github.com/phongndo/pi-diff"
   }
 }

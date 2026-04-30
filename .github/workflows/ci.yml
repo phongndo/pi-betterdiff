@@ -34,3 +34,6 @@ jobs:
 
       - name: Verify package contents
         run: npm run pack:check
+
+      - name: Smoke-test packed extension
+        run: npm run pack:smoke
