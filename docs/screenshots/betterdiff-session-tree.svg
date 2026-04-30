@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1095" height="826" viewBox="0 0 1095 826" role="img" aria-label="BetterDiff session tree">
+<svg xmlns="http://www.w3.org/2000/svg" width="1095" height="826" viewBox="0 0 1095 826" role="img" aria-label="diff session tree">
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.42"/>
@@ -15,14 +15,14 @@
   <circle cx="44" cy="43" r="6" fill="#ff5f57"/>
   <circle cx="64" cy="43" r="6" fill="#ffbd2e"/>
   <circle cx="84" cy="43" r="6" fill="#28c840"/>
-  <text x="112" y="43" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700" fill="#e5eefb">BetterDiff session tree</text>
+  <text x="112" y="43" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700" fill="#e5eefb">diff session tree</text>
   <text x="112" y="59" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="600" fill="#9ca3af">Active pi branch, changed files, hunks, and inline diff context</text>
   <g font-family="SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="500">
 <text x="34" y="88" xml:space="preserve"></text>
 <text x="34" y="108" xml:space="preserve"><tspan fill="#334155" font-weight="500">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
-<text x="34" y="128" xml:space="preserve"><tspan fill="#d8dee9" font-weight="500">  </tspan><tspan fill="#d8dee9" font-weight="700">Better Diff — Session turns</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#8f9bae" font-weight="500">4 turns • 5 files • 6 hunks •</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#86efac" font-weight="500">+102</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#fca5a5" font-weight="500">-14</tspan></text>
+<text x="34" y="128" xml:space="preserve"><tspan fill="#d8dee9" font-weight="500">  </tspan><tspan fill="#d8dee9" font-weight="700">diff — Session turns</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#8f9bae" font-weight="500">4 turns • 5 files • 6 hunks •</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#86efac" font-weight="500">+102</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#fca5a5" font-weight="500">-14</tspan></text>
 <text x="34" y="148" xml:space="preserve"><tspan fill="#8f9bae" font-weight="500">  pi session edit/write history by user turn</tspan></text>
-<text x="34" y="168" xml:space="preserve"><tspan fill="#8f9bae" font-weight="500">  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/branch/dive. tab: turn/files. [/]: hunk. [f/]f: file. /: search. ?: g</tspan><tspan fill="#d8dee9" font-weight="500">...</tspan></text>
+<text x="34" y="168" xml:space="preserve"><tspan fill="#8f9bae" font-weight="500">  ↑/↓: move. ←/→ or ctrl+u/d: page. h/l: fold/dive. tab: turn/files. [h/]h: hunk. [f/]f: file. /: search. ?: g</tspan><tspan fill="#d8dee9" font-weight="500">...</tspan></text>
 <text x="34" y="188" xml:space="preserve"><tspan fill="#334155" font-weight="500">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
 <text x="34" y="208" xml:space="preserve"></text>
 <text x="34" y="228" xml:space="preserve"><tspan fill="#d8dee9" font-weight="500">  </tspan><tspan fill="#7dd3fc" font-weight="500">• </tspan><tspan fill="#7dd3fc" font-weight="500">user: </tspan><tspan fill="#d8dee9" font-weight="500">Add /diff command and load session mutations</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#86efac" font-weight="500">+28</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#fca5a5" font-weight="500">-4</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#fbbf24" font-weight="500">1</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#8f9bae" font-weight="500">file</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#fbbf24" font-weight="500">1</tspan><tspan fill="#d8dee9" font-weight="500"> </tspan><tspan fill="#8f9bae" font-weight="500">hunk</tspan></text>

@@ -4,11 +4,11 @@ A [pi](https://pi.dev) extension package focused on better session-diff ergonomi
 
 The extension now includes an initial `/diff` UI prototype for reviewing agent-produced `edit` and `write` mutations across the current pi session tree, plus practical Git changes and branch comparison modes.
 
-![pi-diff session tree reviewing a pi session branch](docs/screenshots/betterdiff-session-tree.svg)
+![diff session tree reviewing a pi session branch](docs/screenshots/betterdiff-session-tree.svg)
 
 <p>
-  <img src="docs/screenshots/betterdiff-git-changes.svg" alt="pi-diff Git changes mode with staged changes above unstaged and untracked changes" width="49%">
-  <img src="docs/screenshots/betterdiff-scoped-actions.svg" alt="pi-diff scoped actions menu for summaries and undo actions" width="49%">
+  <img src="docs/screenshots/betterdiff-git-changes.svg" alt="diff Git changes mode with staged changes above unstaged and untracked changes" width="49%">
+  <img src="docs/screenshots/betterdiff-scoped-actions.svg" alt="diff scoped actions menu for summaries and undo actions" width="49%">
 </p>
 
 ## Install
@@ -37,7 +37,7 @@ Try without installing:
 pi -e .
 ```
 
-Then use `/diff` inside pi to open the pi-diff review UI.
+Then use `/diff` inside pi to open the diff review UI.
 
 ## What is included
 
