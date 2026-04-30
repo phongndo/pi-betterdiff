@@ -28,7 +28,7 @@ pi install git:github.com/phongndo/pi-diff
 Install a pinned GitHub release/tag:
 
 ```bash
-pi install git:github.com/phongndo/pi-diff@v0.1.2
+pi install git:github.com/phongndo/pi-diff@v0.1.3
 ```
 
 Try without installing:
